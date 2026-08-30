@@ -1,1 +1,1 @@
-https://github.com/MIATSUNO/Kayepad
+https://kayepad.neocities.org
