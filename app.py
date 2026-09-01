@@ -49,7 +49,7 @@ if not JWT_SECRET and os.getenv("ENVIRONMENT", "development") == "production":
     raise RuntimeError("JWT_SECRET is required in production")
 JWT_SECRET = JWT_SECRET or "development-only-change-me"
 app = FastAPI(title="Kayepad API", version="2.0.0")
-origins = [x.strip() for x in os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",") if x.strip()]
+origins = [x.strip() for x in os.getenv("CORS_ORIGINS", "https://kayepad.neocities.org,http://localhost:3000").split(",") if x.strip()]
 app.add_middleware(CORSMiddleware, allow_origins=origins, allow_methods=["GET","POST","PATCH","DELETE","OPTIONS"], allow_headers=["Authorization","Content-Type","X-Admin-Key"])
 
 class User(SQLModel, table=True):
@@ -245,7 +245,7 @@ def logout(authorization: Optional[str]=Header(None), u=Depends(current_user)):
 def refresh_verified(s, u):
     age = datetime.now(UTC) - (u.created_at.replace(tzinfo=UTC) if u.created_at.tzinfo is None else u.created_at)
     total = len(s.exec(select(Work).where(Work.user_id==u.id, Work.published)).all())
-    if u.email_verified and age >= timedelta(days=7) and total >= 3 and u.badge == "normal":
+    if u.email_verified and age > timedelta(days=30) and total >= 3 and u.badge == "normal":
         u.badge = "verified"; s.add(u); s.commit(); s.refresh(u)
 @app.get("/me")
 def me(u=Depends(current_user)):
