@@ -38,7 +38,9 @@ elif DATABASE_URL.startswith("postgresql://"):
     DATABASE_URL = "postgresql+psycopg://" + DATABASE_URL[13:]
 sqlite = DATABASE_URL.startswith("sqlite")
 engine = create_engine(DATABASE_URL, echo=False, pool_pre_ping=True,
-    connect_args={"check_same_thread": False} if sqlite else {})
+    # Supabase poolers can reuse prepared-statement names across backend connections.
+    # Disable psycopg auto-prepare so startup reflection and pooled requests are safe.
+    connect_args={"check_same_thread": False} if sqlite else {"prepare_threshold": None, "prepared_statement_cache_size": 0})
 def hash_password(value: str) -> str:
     return bcrypt.hashpw(value.encode(), bcrypt.gensalt()).decode()
 def verify_password(value: str, hashed: str) -> bool:
