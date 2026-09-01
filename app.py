@@ -275,7 +275,8 @@ def comments(work_id:UUID):
 @app.post("/works/{work_id}/comments")
 def add_comment(work_id:UUID,data:CommentIn,u=Depends(current_user)):
     with Session(engine) as s:
-        if not s.get(Work,work_id): raise HTTPException(404,"Obra não encontrada")
+        work=s.get(Work,work_id)
+        if not work or not work.published: raise HTTPException(404,"Obra não encontrada")
         c=Comment(work_id=work_id,user_id=u.id,body=data.body.strip()); s.add(c); s.commit(); s.refresh(c); return {"id":str(c.id),"body":c.body,"created_at":c.created_at}
 @app.get("/users/{user_id}/followers")
 def followers(user_id:UUID, limit:int=Query(50,ge=1,le=100)):
