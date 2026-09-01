@@ -1,4 +1,4 @@
-import os, secrets, hashlib, ipaddress, re, json, asyncio
+import os, secrets, hashlib, ipaddress, re, json, asyncio, html
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 from uuid import UUID, uuid4
@@ -72,6 +72,17 @@ class Work(SQLModel, table=True):
     id: UUID = Field(default_factory=uuid4, primary_key=True); user_id: UUID = Field(index=True)
     title: str = Field(max_length=140); excerpt: str = Field(default="", max_length=3000); cover_url: str = Field(default="", max_length=500)
     chapters: int = 0; reads: int = 0; published: bool = True; created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+class Chapter(SQLModel, table=True):
+    __tablename__ = "kp_chapters"
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    work_id: UUID = Field(index=True, foreign_key="kp_works.id")
+    position: int = Field(default=1, index=True, ge=1, le=10000)
+    title: str = Field(default="", max_length=140)
+    content: str = Field(max_length=100000)
+    published: bool = True
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    __table_args__ = (UniqueConstraint("work_id", "position", name="uq_kp_chapter_position"),)
+
 class Vote(SQLModel, table=True):
     __tablename__ = "kp_votes"
     id: UUID = Field(default_factory=uuid4, primary_key=True); work_id: UUID = Field(index=True); user_id: UUID = Field(index=True)
@@ -134,10 +145,20 @@ class Login(BaseModel): email: EmailStr; password: str
 class CommentIn(BaseModel):
     body: str = PField(min_length=1, max_length=2000)
     _safe = field_validator("body")(reject_malicious)
+class ChapterIn(BaseModel):
+    title: str = PField(default="", max_length=140)
+    content: str = PField(min_length=1, max_length=100000)
+    position: Optional[int] = PField(default=None, ge=1, le=10000)
+    _safe = field_validator("title", "content")(reject_malicious)
+
 class WorkIn(BaseModel):
     title: str = PField(min_length=1, max_length=140); excerpt: str = PField(default="", max_length=3000)
     cover_url: str = PField(default="", max_length=500); chapters: int = PField(default=0, ge=0, le=10000)
-    _safe = field_validator("title", "excerpt")(reject_malicious)
+    # Optional convenience for clients creating a work and its first chapter atomically.
+    initial_chapter: Optional[str] = PField(default=None, min_length=1, max_length=100000)
+    initial_chapter_content: Optional[str] = PField(default=None, min_length=1, max_length=100000)
+    initial_chapter_title: str = PField(default="", max_length=140)
+    _safe = field_validator("title", "excerpt", "initial_chapter", "initial_chapter_content", "initial_chapter_title")(lambda v: reject_malicious(v) if v is not None else v)
     @field_validator("cover_url")
     @classmethod
     def cover_policy(cls, v): return safe_public_url(v)
@@ -214,9 +235,19 @@ def audit(s, action: str, target_id=None, request: Request | None=None):
     digest = hashlib.sha256((os.getenv("IP_HASH_SALT", "kayepad-privacy") + raw).encode()).hexdigest()
     s.add(AuditEvent(action=action, target_id=target_id, ip_hash=digest))
 
+def clean_output(value):
+    # API responses are rendered by multiple clients; escape markup at the boundary
+    # so stored plain text can never become HTML in an unsafe consumer.
+    return html.escape(str(value), quote=True)
+
+def chapter_json(c):
+    return {"id": str(c.id), "work_id": str(c.work_id), "position": c.position,
+            "title": clean_output(c.title), "content": clean_output(c.content),
+            "published": c.published, "created_at": c.created_at}
+
 def work_json(s,w):
     a=s.get(User,w.user_id); votes=len(s.exec(select(Vote).where(Vote.work_id==w.id)).all())
-    return {"id":str(w.id),"title":w.title,"excerpt":w.excerpt,"cover_url":w.cover_url,"chapters":w.chapters,"reads":w.reads,"votes":votes,"author":a.pseudonym if a else "", "badge":a.badge if a else "normal"}
+    return {"id":str(w.id),"title":clean_output(w.title),"excerpt":clean_output(w.excerpt),"cover_url":clean_output(w.cover_url),"chapters":w.chapters,"reads":w.reads,"votes":votes,"author":clean_output(a.pseudonym if a else ""), "badge":clean_output(a.badge if a else "normal")}
 @app.on_event("startup")
 def startup():
     # Keep startup compatible with both a fresh SQLite database and an existing
@@ -284,7 +315,7 @@ def delete_me(data: DeleteMeIn, request: Request, u=Depends(current_user)):
             (RoomInvite, (RoomInvite.inviter_id==db.id) | (RoomInvite.invitee_id==db.id))]:
             for row in s.exec(select(model).where(predicate)).all(): s.delete(row)
         for wid in work_ids:
-            for model in (Vote, Comment):
+            for model in (Vote, Comment, Chapter):
                 for row in s.exec(select(model).where(model.work_id==wid)).all(): s.delete(row)
             work=s.get(Work,wid)
             if work: s.delete(work)
@@ -329,22 +360,73 @@ def patch_me(data: ProfilePatch,u=Depends(current_user)):
 @app.get("/works")
 def works(limit:int=Query(20,ge=1,le=100),offset:int=Query(0,ge=0)):
     with Session(engine) as s: return [work_json(s,w) for w in s.exec(select(Work).where(Work.published).order_by(Work.created_at.desc()).offset(offset).limit(limit)).all()]
+@app.get("/works/{work_id}")
+def work_detail(work_id: UUID, authorization: Optional[str] = Header(None)):
+    with Session(engine) as s:
+        w=s.get(Work, work_id)
+        if not w: raise HTTPException(404, "Obra não encontrada")
+        # Published works are public. An owner may inspect an unpublished draft with a valid session.
+        if not w.published:
+            owner = None
+            if authorization and authorization.startswith("Bearer "):
+                token_hash=hashlib.sha256(authorization[7:].encode()).hexdigest()
+                st=s.exec(select(SessionToken).where(SessionToken.token_hash==token_hash, SessionToken.revoked==False)).first()
+                candidate=s.get(User, st.user_id) if st else None
+                if st and candidate and not candidate.banned and (st.expires_at.replace(tzinfo=UTC) if st.expires_at.tzinfo is None else st.expires_at) >= datetime.now(UTC): owner=candidate
+            if not owner or owner.id != w.user_id: raise HTTPException(404, "Obra não encontrada")
+        return work_json(s,w)
+
+@app.get("/works/{work_id}/chapters")
+def work_chapters(work_id: UUID, authorization: Optional[str] = Header(None)):
+    with Session(engine) as s:
+        w=s.get(Work, work_id)
+        if not w: raise HTTPException(404, "Obra não encontrada")
+        owner = False
+        if not w.published:
+            token_hash=hashlib.sha256(authorization[7:].encode()).hexdigest() if authorization and authorization.startswith("Bearer ") else ""
+            st=s.exec(select(SessionToken).where(SessionToken.token_hash==token_hash, SessionToken.revoked==False)).first()
+            expiry = (st.expires_at.replace(tzinfo=UTC) if st and st.expires_at.tzinfo is None else (st.expires_at if st else None))
+            owner = bool(st and expiry and expiry >= datetime.now(UTC) and st.user_id == w.user_id and s.get(User, st.user_id) and not s.get(User, st.user_id).banned)
+            if not owner: raise HTTPException(404, "Obra não encontrada")
+        query=select(Chapter).where(Chapter.work_id==work_id)
+        if not owner: query=query.where(Chapter.published==True)
+        return [chapter_json(c) for c in s.exec(query.order_by(Chapter.position)).all()]
+
 @app.post("/works")
 def create_work(data: WorkIn, u=Depends(current_user)):
     with Session(engine) as s:
-        w=Work(user_id=u.id, title=data.title.strip(), excerpt=data.excerpt.strip(), cover_url=data.cover_url.strip(), chapters=data.chapters)
+        initial_content=data.initial_chapter_content or data.initial_chapter
+        initial_count=1 if initial_content else 0
+        w=Work(user_id=u.id, title=data.title.strip(), excerpt=data.excerpt.strip(), cover_url=data.cover_url.strip(), chapters=max(data.chapters, initial_count))
         s.add(w); s.flush()
+        if initial_content:
+            s.add(Chapter(work_id=w.id, position=1, title=data.initial_chapter_title.strip(), content=initial_content.strip()))
         followers_ids=[f.follower_id for f in s.exec(select(Follow).where(Follow.followed_id==u.id)).all()]
         for recipient in followers_ids:
             s.add(Notification(recipient_id=recipient,actor_id=u.id,kind="post",title=f"{u.pseudonym} publicou uma obra",body=data.title.strip(),url=f"/works/{w.id}"))
         s.commit(); s.refresh(w); return work_json(s,w)
+
+@app.post("/works/{work_id}/chapters")
+def add_chapter(work_id: UUID, data: ChapterIn, u=Depends(current_user)):
+    with Session(engine) as s:
+        w=s.get(Work, work_id)
+        if not w: raise HTTPException(404, "Obra não encontrada")
+        if w.user_id != u.id: raise HTTPException(403, "Somente o proprietário pode adicionar capítulos")
+        position=data.position
+        if position is None:
+            last=s.exec(select(Chapter).where(Chapter.work_id==work_id).order_by(Chapter.position.desc())).first()
+            position=(last.position + 1) if last else 1
+        if s.exec(select(Chapter).where(Chapter.work_id==work_id, Chapter.position==position)).first(): raise HTTPException(409, "Posição de capítulo já existe")
+        c=Chapter(work_id=work_id, position=position, title=data.title.strip(), content=data.content.strip())
+        s.add(c); w.chapters=max(w.chapters,position); s.add(w); s.commit(); s.refresh(c)
+        return chapter_json(c)
 @app.delete("/works/{work_id}")
 def delete_work(work_id: UUID, request: Request, u=Depends(current_user)):
     with Session(engine) as s:
         w=s.get(Work, work_id)
         if not w: raise HTTPException(404, "Obra não encontrada")
         if w.user_id != u.id: raise HTTPException(403, "Somente o proprietário pode excluir a obra")
-        for model in (Vote, Comment):
+        for model in (Vote, Comment, Chapter):
             for row in s.exec(select(model).where(model.work_id==work_id)).all(): s.delete(row)
         s.delete(w); audit(s, "work.delete", work_id, request); s.commit()
     return {"ok": True, "deleted": True}
