@@ -1,98 +1,273 @@
-import os, hashlib, secrets
+import os, secrets, hashlib, ipaddress, re
 from datetime import datetime, timedelta, timezone
 from typing import Optional
-from fastapi import FastAPI, Depends, HTTPException, Header, Query
+from uuid import UUID, uuid4
+from urllib.parse import urlparse
+from fastapi import FastAPI, Depends, HTTPException, Header, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, EmailStr
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, EmailStr, Field as PField, field_validator
 from sqlmodel import SQLModel, Field, Session, create_engine, select
+from sqlalchemy import text, UniqueConstraint
+import bcrypt
 
-DATABASE_URL=os.getenv('DATABASE_URL','sqlite:///./kayepad.db')
-engine=create_engine(DATABASE_URL, echo=False, connect_args={'check_same_thread':False} if DATABASE_URL.startswith('sqlite') else {})
-app=FastAPI(title='Kayepad API', version='1.0.0')
-app.add_middleware(CORSMiddleware, allow_origins=os.getenv('CORS_ORIGINS','*').split(','), allow_methods=['*'], allow_headers=['*'])
+UTC = timezone.utc
+MAX_BODY_BYTES = 1_048_576
+SUSPICIOUS_INPUT = re.compile(r"(?:<script|javascript:|onerror\\s*=|union\\s+select|drop\\s+table|\\.\\./|169\\.254\\.169\\.254)", re.I)
+
+def safe_public_url(value: str) -> str:
+    value = value.strip()
+    if not value: return value
+    p = urlparse(value)
+    if p.scheme not in {"https"}: raise ValueError("A URL deve usar HTTPS")
+    if not p.hostname: raise ValueError("URL inválida")
+    try:
+        ip = ipaddress.ip_address(p.hostname)
+        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved: raise ValueError("Endereço não permitido")
+    except ValueError as e:
+        if str(e) == "Endereço não permitido": raise
+    if p.username or p.password or len(value) > 500: raise ValueError("URL não permitida")
+    return value
+
+UTC = timezone.utc
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./kayepad.db")
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = "postgresql+psycopg://" + DATABASE_URL[11:]
+sqlite = DATABASE_URL.startswith("sqlite")
+engine = create_engine(DATABASE_URL, echo=False, pool_pre_ping=True,
+    connect_args={"check_same_thread": False} if sqlite else {})
+def hash_password(value: str) -> str:
+    return bcrypt.hashpw(value.encode(), bcrypt.gensalt()).decode()
+def verify_password(value: str, hashed: str) -> bool:
+    try: return bcrypt.checkpw(value.encode(), hashed.encode())
+    except (ValueError, TypeError): return False
+JWT_SECRET = os.getenv("JWT_SECRET")
+if not JWT_SECRET and os.getenv("ENVIRONMENT", "development") == "production":
+    raise RuntimeError("JWT_SECRET is required in production")
+JWT_SECRET = JWT_SECRET or "development-only-change-me"
+app = FastAPI(title="Kayepad API", version="2.0.0")
+origins = [x.strip() for x in os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",") if x.strip()]
+app.add_middleware(CORSMiddleware, allow_origins=origins, allow_methods=["GET","POST","PATCH","DELETE","OPTIONS"], allow_headers=["Authorization","Content-Type","X-Admin-Key"])
 
 class User(SQLModel, table=True):
- id: Optional[int]=Field(default=None, primary_key=True); email:str; pseudonym:str; password_hash:str; bio:str=''; avatar_url:str=''; email_verified:bool=False; created_at:datetime=Field(default_factory=lambda:datetime.now(timezone.utc)); badge:str='normal'; banned:bool=False
+    __tablename__ = "kp_users"
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    email: str = Field(index=True, unique=True, max_length=320)
+    pseudonym: str = Field(index=True, unique=True, max_length=40)
+    password_hash: str
+    bio: str = Field(default="", max_length=1000); avatar_url: str = Field(default="", max_length=500)
+    badge: str = Field(default="normal", max_length=20); email_verified: bool = False; banned: bool = False
+    kaye_enabled: bool = True; created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+class SessionToken(SQLModel, table=True):
+    __tablename__ = "kp_sessions"
+    id: UUID = Field(default_factory=uuid4, primary_key=True); user_id: UUID = Field(index=True)
+    token_hash: str = Field(index=True, unique=True); expires_at: datetime; revoked: bool = False
 class Work(SQLModel, table=True):
- id: Optional[int]=Field(default=None, primary_key=True); user_id:int; title:str; excerpt:str=''; cover_url:str=''; chapters:int=0; reads:int=0; votes:int=0; published:bool=True; created_at:datetime=Field(default_factory=lambda:datetime.now(timezone.utc))
+    __tablename__ = "kp_works"
+    id: UUID = Field(default_factory=uuid4, primary_key=True); user_id: UUID = Field(index=True)
+    title: str = Field(max_length=140); excerpt: str = Field(default="", max_length=3000); cover_url: str = Field(default="", max_length=500)
+    chapters: int = 0; reads: int = 0; published: bool = True; created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+class Vote(SQLModel, table=True):
+    __tablename__ = "kp_votes"
+    id: UUID = Field(default_factory=uuid4, primary_key=True); work_id: UUID = Field(index=True); user_id: UUID = Field(index=True)
+    __table_args__ = (UniqueConstraint("work_id", "user_id", name="uq_kp_vote"),)
 class Comment(SQLModel, table=True):
- id: Optional[int]=Field(default=None, primary_key=True); work_id:int; user_id:Optional[int]=None; body:str; created_at:datetime=Field(default_factory=lambda:datetime.now(timezone.utc))
+    __tablename__ = "kp_comments"
+    id: UUID = Field(default_factory=uuid4, primary_key=True); work_id: UUID = Field(index=True); user_id: UUID
+    body: str = Field(max_length=2000); hidden: bool = False; created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 class Game(SQLModel, table=True):
- id: Optional[int]=Field(default=None, primary_key=True); kind:str; prompt:str; answer:str; cover_url:str=''; active:bool=True
+    __tablename__ = "kp_games"
+    id: UUID = Field(default_factory=uuid4, primary_key=True); kind: str = Field(max_length=30); prompt: str = Field(max_length=1000); answer: str = Field(max_length=1000); cover_url: str = ""; active: bool = True
 
-@app.on_event('startup')
+def reject_malicious(value: str) -> str:
+    if SUSPICIOUS_INPUT.search(value): raise ValueError("Conteúdo não permitido")
+    return value.strip()
+
+class Signup(BaseModel):
+    email: EmailStr; pseudonym: str = PField(min_length=3, max_length=40, pattern=r"^[A-Za-z0-9_\.\-]+$"); password: str = PField(min_length=10, max_length=128)
+    @field_validator("password")
+    @classmethod
+    def password_policy(cls, v):
+        if not any(c.islower() for c in v) or not any(c.isupper() for c in v) or not any(c.isdigit() for c in v): raise ValueError("Senha deve conter maiúscula, minúscula e número")
+        return v
+class Login(BaseModel): email: EmailStr; password: str
+class CommentIn(BaseModel):
+    body: str = PField(min_length=1, max_length=2000)
+    _safe = field_validator("body")(reject_malicious)
+class WorkIn(BaseModel):
+    title: str = PField(min_length=1, max_length=140); excerpt: str = PField(default="", max_length=3000)
+    cover_url: str = PField(default="", max_length=500); chapters: int = PField(default=0, ge=0, le=10000)
+    _safe = field_validator("title", "excerpt")(reject_malicious)
+    @field_validator("cover_url")
+    @classmethod
+    def cover_policy(cls, v): return safe_public_url(v)
+class ProfilePatch(BaseModel):
+    bio: Optional[str] = PField(None, max_length=1000); avatar_url: Optional[str] = PField(None, max_length=500); kaye_enabled: Optional[bool] = None
+    _safe = field_validator("bio")(lambda v: reject_malicious(v) if v is not None else v)
+    @field_validator("avatar_url")
+    @classmethod
+    def avatar_policy(cls, v): return safe_public_url(v) if v is not None else v
+class BadgeIn(BaseModel): badge: str
+class KayeIn(BaseModel):
+    message: str = PField(min_length=1, max_length=1000)
+    _safe = field_validator("message")(reject_malicious)
+
+_requests = {}
+def rate_limit(request: Request):
+    key = (request.client.host if request.client else "unknown", request.url.path.split('/')[1])
+    now = datetime.now(UTC).timestamp(); window = 60
+    bucket = [t for t in _requests.get(key, []) if now-t < window]
+    ceiling = 12 if request.url.path in {"/auth/login", "/auth/signup"} else int(os.getenv("RATE_LIMIT_PER_MINUTE", "120"))
+    if len(bucket) >= ceiling: raise HTTPException(429, "Muitas solicitações; tente novamente em instantes")
+    bucket.append(now); _requests[key] = bucket
+@app.middleware("http")
+async def security_gate(request: Request, call_next):
+    try:
+        if request.headers.get("content-length") and int(request.headers["content-length"]) > MAX_BODY_BYTES: raise HTTPException(413, "Requisição muito grande")
+        if SUSPICIOUS_INPUT.search(str(request.url.query)): raise HTTPException(400, "Requisição não permitida")
+        if request.method in {"POST", "PATCH", "PUT", "DELETE"}:
+            origin = request.headers.get("origin")
+            if origin and origin not in origins: raise HTTPException(403, "Origem não permitida")
+        rate_limit(request)
+        response = await call_next(request)
+        response.headers.update({"X-Content-Type-Options":"nosniff","X-Frame-Options":"DENY","Referrer-Policy":"strict-origin-when-cross-origin","Content-Security-Policy":"default-src 'none'; frame-ancestors 'none'"})
+        return response
+    except HTTPException as e: return JSONResponse({"detail": e.detail}, status_code=e.status_code, headers={"X-Content-Type-Options":"nosniff"})
+
+def public_user(u): return {"id":str(u.id),"pseudonym":u.pseudonym,"bio":u.bio,"avatar_url":u.avatar_url,"badge":u.badge,"kaye_enabled":u.kaye_enabled}
+def issue(u):
+    raw = secrets.token_urlsafe(48); h = hashlib.sha256(raw.encode()).hexdigest()
+    with Session(engine) as s: s.add(SessionToken(user_id=u.id, token_hash=h, expires_at=datetime.now(UTC)+timedelta(days=30))); s.commit()
+    return raw
+def current_user(authorization: Optional[str] = Header(None)):
+    if not authorization or not authorization.startswith("Bearer "): raise HTTPException(401,"Autenticação necessária")
+    h=hashlib.sha256(authorization[7:].encode()).hexdigest()
+    with Session(engine) as s:
+        st=s.exec(select(SessionToken).where(SessionToken.token_hash==h, SessionToken.revoked==False)).first()
+        expiry = st.expires_at.replace(tzinfo=UTC) if st and st.expires_at.tzinfo is None else (st.expires_at if st else None)
+        if not st or expiry < datetime.now(UTC): raise HTTPException(401,"Sessão inválida ou expirada")
+        u=s.get(User,st.user_id)
+        if not u or u.banned: raise HTTPException(403,"Conta banida")
+        return u
+def admin_key(x_admin_key: Optional[str]=Header(None)):
+    key=os.getenv("ADMIN_API_KEY")
+    if not key or not x_admin_key or not secrets.compare_digest(key,x_admin_key): raise HTTPException(403,"Acesso administrativo negado")
+
+def work_json(s,w):
+    a=s.get(User,w.user_id); votes=len(s.exec(select(Vote).where(Vote.work_id==w.id)).all())
+    return {"id":str(w.id),"title":w.title,"excerpt":w.excerpt,"cover_url":w.cover_url,"chapters":w.chapters,"reads":w.reads,"votes":votes,"author":a.pseudonym if a else "", "badge":a.badge if a else "normal"}
+@app.on_event("startup")
 def startup(): SQLModel.metadata.create_all(engine)
-
-def token_for(user): return hashlib.sha256(f'{user.id}:{user.email}:{os.getenv("JWT_SECRET","change-me")}'.encode()).hexdigest()
-def current_user(authorization:Optional[str]=Header(None)):
- if not authorization or not authorization.startswith('Bearer '): raise HTTPException(401,'Autenticação necessária')
- value=authorization[7:]
- with Session(engine) as s:
-  for u in s.exec(select(User)).all():
-   if secrets.compare_digest(token_for(u),value):
-    if u.banned: raise HTTPException(403,'Conta banida')
-    return u
- raise HTTPException(401,'Sessão inválida')
-def admin_key(x_admin_key:Optional[str]=Header(None)):
- key=os.getenv('ADMIN_API_KEY')
- if not key or not x_admin_key or not secrets.compare_digest(key,x_admin_key): raise HTTPException(403,'Acesso administrativo negado')
- return True
-class Signup(BaseModel): email:EmailStr; pseudonym:str; password:str
-class CommentIn(BaseModel): body:str
-class BadgeIn(BaseModel): badge:str
-
-@app.get('/health')
-def health(): return {'status':'ok','service':'kayepad-api','time':datetime.now(timezone.utc)}
-@app.post('/auth/signup')
-def signup(data:Signup):
- with Session(engine) as s:
-  if s.exec(select(User).where(User.email==data.email)).first(): raise HTTPException(409,'E-mail já cadastrado')
-  u=User(email=data.email,pseudonym=data.pseudonym,password_hash=hashlib.sha256(data.password.encode()).hexdigest()); s.add(u); s.commit(); s.refresh(u)
-  return {'user':{'id':u.id,'pseudonym':u.pseudonym,'badge':u.badge},'token':token_for(u)}
-@app.get('/me')
-def me(u=Depends(current_user)): return u
-@app.get('/works')
-def works(limit:int=Query(20,le=100), offset:int=0):
- with Session(engine) as s:
-  rows=s.exec(select(Work,User).join(User,User.id==Work.user_id).where(Work.published).offset(offset).limit(limit)).all()
-  return [{'id':w.id,'title':w.title,'excerpt':w.excerpt,'cover_url':w.cover_url,'chapters':w.chapters,'reads':w.reads,'votes':w.votes,'author':a.pseudonym,'badge':a.badge} for w,a in rows]
-@app.post('/works/{work_id}/read')
-def read(work_id:int):
- with Session(engine) as s:
-  w=s.get(Work,work_id)
-  if not w: raise HTTPException(404,'Obra não encontrada')
-  w.reads+=1; s.add(w); s.commit(); return {'reads':w.reads}
-@app.post('/works/{work_id}/vote')
-def vote(work_id:int):
- with Session(engine) as s:
-  w=s.get(Work,work_id)
-  if not w: raise HTTPException(404,'Obra não encontrada')
-  w.votes+=1; s.add(w); s.commit(); return {'votes':w.votes}
-@app.get('/works/{work_id}/comments')
-def comments(work_id:int):
- with Session(engine) as s: return s.exec(select(Comment).where(Comment.work_id==work_id).order_by(Comment.created_at.desc())).all()
-@app.post('/works/{work_id}/comments')
-def add_comment(work_id:int,data:CommentIn,u=Depends(current_user)):
- with Session(engine) as s:
-  c=Comment(work_id=work_id,user_id=u.id,body=data.body[:2000]); s.add(c); s.commit(); s.refresh(c); return c
-@app.get('/reels')
-def reels(): return works(30,0)
-@app.get('/games')
+@app.get("/health")
+def health(): return {"status":"ok","service":"kayepad-api","time":datetime.now(UTC)}
+@app.get("/ready")
+def ready():
+    try:
+        with Session(engine) as s: s.exec(text("SELECT 1"))
+        return {"status":"ready","database":"ok"}
+    except Exception: raise HTTPException(503,"Banco de dados indisponível")
+@app.post("/auth/signup")
+def signup(data: Signup):
+    normalized_email = str(data.email).lower()
+    with Session(engine) as s:
+        if s.exec(select(User).where((User.email==normalized_email) | (User.pseudonym==data.pseudonym))).first(): raise HTTPException(409,"E-mail ou pseudônimo já cadastrado")
+        u=User(email=normalized_email,pseudonym=data.pseudonym,password_hash=hash_password(data.password)); s.add(u); s.commit(); s.refresh(u); return {"user":public_user(u),"token":issue(u)}
+@app.post("/auth/login")
+def login(data: Login):
+    with Session(engine) as s: u=s.exec(select(User).where(User.email==str(data.email).lower())).first()
+    if not u or not verify_password(data.password,u.password_hash): raise HTTPException(401,"Credenciais inválidas")
+    if u.banned: raise HTTPException(403,"Conta banida")
+    return {"user":public_user(u),"token":issue(u)}
+@app.post("/auth/logout")
+def logout(authorization: Optional[str]=Header(None), u=Depends(current_user)):
+    if authorization:
+        with Session(engine) as s:
+            st=s.exec(select(SessionToken).where(SessionToken.token_hash==hashlib.sha256(authorization[7:].encode()).hexdigest())).first()
+            if st: st.revoked=True; s.add(st); s.commit()
+    return {"ok":True}
+def refresh_verified(s, u):
+    age = datetime.now(UTC) - (u.created_at.replace(tzinfo=UTC) if u.created_at.tzinfo is None else u.created_at)
+    total = len(s.exec(select(Work).where(Work.user_id==u.id, Work.published)).all())
+    if u.email_verified and age >= timedelta(days=7) and total >= 3 and u.badge == "normal":
+        u.badge = "verified"; s.add(u); s.commit(); s.refresh(u)
+@app.get("/me")
+def me(u=Depends(current_user)):
+    with Session(engine) as s:
+        db=s.get(User,u.id); refresh_verified(s,db); return public_user(db)
+@app.patch("/me")
+def patch_me(data: ProfilePatch,u=Depends(current_user)):
+    with Session(engine) as s:
+        db=s.get(User,u.id)
+        for k,v in data.model_dump(exclude_none=True).items(): setattr(db,k,v)
+        s.add(db); s.commit(); s.refresh(db); return public_user(db)
+@app.get("/works")
+def works(limit:int=Query(20,ge=1,le=100),offset:int=Query(0,ge=0)):
+    with Session(engine) as s: return [work_json(s,w) for w in s.exec(select(Work).where(Work.published).order_by(Work.created_at.desc()).offset(offset).limit(limit)).all()]
+@app.post("/works")
+def create_work(data: WorkIn, u=Depends(current_user)):
+    with Session(engine) as s:
+        w=Work(user_id=u.id, title=data.title.strip(), excerpt=data.excerpt.strip(), cover_url=data.cover_url.strip(), chapters=data.chapters)
+        s.add(w); s.commit(); s.refresh(w); return work_json(s,w)
+@app.post("/works/{work_id}/read")
+def read(work_id:UUID):
+    with Session(engine) as s:
+        w=s.get(Work,work_id)
+        if not w or not w.published: raise HTTPException(404,"Obra não encontrada")
+        w.reads+=1; s.add(w); s.commit(); return {"reads":w.reads}
+@app.post("/works/{work_id}/vote")
+def vote(work_id:UUID,u=Depends(current_user)):
+    with Session(engine) as s:
+        w=s.get(Work,work_id)
+        if not w or not w.published: raise HTTPException(404,"Obra não encontrada")
+        if s.exec(select(Vote).where(Vote.work_id==work_id,Vote.user_id==u.id)).first(): raise HTTPException(409,"Você já votou nesta obra")
+        s.add(Vote(work_id=work_id,user_id=u.id)); s.commit(); return {"votes":len(s.exec(select(Vote).where(Vote.work_id==work_id)).all())}
+@app.get("/works/{work_id}/comments")
+def comments(work_id:UUID):
+    with Session(engine) as s: return [{"id":str(c.id),"body":c.body,"created_at":c.created_at,"user_id":str(c.user_id)} for c in s.exec(select(Comment).where(Comment.work_id==work_id,Comment.hidden==False).order_by(Comment.created_at.desc())).all()]
+@app.post("/works/{work_id}/comments")
+def add_comment(work_id:UUID,data:CommentIn,u=Depends(current_user)):
+    with Session(engine) as s:
+        if not s.get(Work,work_id): raise HTTPException(404,"Obra não encontrada")
+        c=Comment(work_id=work_id,user_id=u.id,body=data.body.strip()); s.add(c); s.commit(); s.refresh(c); return {"id":str(c.id),"body":c.body,"created_at":c.created_at}
+@app.get("/reels")
+def reels(limit:int=Query(30,ge=1,le=100)): return works(limit,0)
+@app.get("/games")
 def games(kind:Optional[str]=None):
- with Session(engine) as s: return s.exec(select(Game).where(Game.active, Game.kind==kind if kind else True)).all()
-@app.post('/admin/users/{user_id}/badge')
-def set_badge(user_id:int,data:BadgeIn,_=Depends(admin_key)):
- if data.badge not in {'normal','support','ambassador','partner','verified'}: raise HTTPException(400,'Selo inválido')
- with Session(engine) as s:
-  u=s.get(User,user_id)
-  if not u: raise HTTPException(404,'Usuário não encontrado')
-  u.badge=data.badge; s.add(u); s.commit(); return {'id':u.id,'badge':u.badge}
-@app.post('/admin/users/{user_id}/ban')
-def ban(user_id:int,_=Depends(admin_key)):
- with Session(engine) as s:
-  u=s.get(User,user_id)
-  if not u: raise HTTPException(404,'Usuário não encontrado')
-  u.banned=True; s.add(u); s.commit(); return {'id':u.id,'banned':True}
-@app.get('/admin/users')
+    with Session(engine) as s: return s.exec(select(Game).where(Game.active, Game.kind==kind if kind else True)).all()
+@app.post("/kaye")
+def kaye(data:KayeIn,u=Depends(current_user)):
+    if not u.kaye_enabled: raise HTTPException(403,"Kaye está desativada nas suas configurações")
+    msg=data.message.lower(); replies=[("perfil","Você pode atualizar bio, avatar e a preferência da Kaye em /me."),("config","Abra suas configurações para controlar a Kaye e seu perfil."),("post","Para publicar uma obra, use o endpoint de obras autenticado."),("vot","Você pode votar uma vez em cada obra."),("coment","Comentários devem respeitar a comunidade e têm limite de 2.000 caracteres.")]
+    answer=next((r for k,r in replies if k in msg),"Posso ajudar com perfil, configurações, posts, comentários e interações. Diga o que você precisa.")
+    return {"answer":answer}
+@app.post("/admin/users/{user_id}/badge")
+def set_badge(user_id:UUID,data:BadgeIn,_=Depends(admin_key)):
+    if data.badge not in {"normal","support","ambassador","partner","verified"}: raise HTTPException(400,"Selo inválido")
+    with Session(engine) as s:
+        u=s.get(User,user_id)
+        if not u: raise HTTPException(404,"Usuário não encontrado")
+        u.badge=data.badge; s.add(u); s.commit(); return {"id":str(u.id),"badge":u.badge}
+@app.post("/admin/users/{user_id}/verify-email")
+def verify_email(user_id:UUID,_=Depends(admin_key)):
+    with Session(engine) as s:
+        u=s.get(User,user_id)
+        if not u: raise HTTPException(404,"Usuário não encontrado")
+        u.email_verified=True; s.add(u); s.commit(); refresh_verified(s,u); return public_user(u)
+@app.post("/admin/comments/{comment_id}/hide")
+def hide_comment(comment_id:UUID,_=Depends(admin_key)):
+    with Session(engine) as s:
+        c=s.get(Comment,comment_id)
+        if not c: raise HTTPException(404,"Comentário não encontrado")
+        c.hidden=True; s.add(c); s.commit(); return {"id":str(c.id),"hidden":True}
+@app.post("/admin/users/{user_id}/ban")
+def ban(user_id:UUID,_=Depends(admin_key)):
+    with Session(engine) as s:
+        u=s.get(User,user_id)
+        if not u: raise HTTPException(404,"Usuário não encontrado")
+        u.banned=True; s.add(u); s.commit(); return {"id":str(u.id),"banned":True}
+@app.get("/admin/users")
 def admin_users(_=Depends(admin_key)):
- with Session(engine) as s: return s.exec(select(User).order_by(User.created_at.desc())).all()
+    with Session(engine) as s: return [public_user(u) for u in s.exec(select(User).order_by(User.created_at.desc())).all()]
+@app.exception_handler(Exception)
+async def unhandled(request, exc):
+    return JSONResponse({"detail":"Erro interno do servidor"},status_code=500)
