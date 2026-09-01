@@ -59,7 +59,7 @@ class User(SQLModel, table=True):
     pseudonym: str = Field(index=True, unique=True, max_length=40)
     password_hash: str
     bio: str = Field(default="", max_length=1000); avatar_url: str = Field(default="", max_length=500)
-    badge: str = Field(default="normal", max_length=20); email_verified: bool = False; banned: bool = False
+    badge: str = Field(default="normal", max_length=20); theme: str = Field(default="noir", max_length=20); email_verified: bool = False; banned: bool = False
     kaye_enabled: bool = True; created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 class SessionToken(SQLModel, table=True):
     __tablename__ = "kp_sessions"
@@ -124,8 +124,15 @@ class WorkIn(BaseModel):
     @classmethod
     def cover_policy(cls, v): return safe_public_url(v)
 class ProfilePatch(BaseModel):
-    bio: Optional[str] = PField(None, max_length=1000); avatar_url: Optional[str] = PField(None, max_length=500); kaye_enabled: Optional[bool] = None
+    pseudonym: Optional[str] = PField(None, min_length=3, max_length=40, pattern=r"^[A-Za-z0-9_\.\-]+$")
+    bio: Optional[str] = PField(None, max_length=1000); avatar_url: Optional[str] = PField(None, max_length=500); theme: Optional[str] = None; kaye_enabled: Optional[bool] = None
     _safe = field_validator("bio")(lambda v: reject_malicious(v) if v is not None else v)
+    @field_validator("theme")
+    @classmethod
+    def theme_policy(cls, v):
+        allowed={"noir","cafe","algodao","brasil","medium","wattpad","gold","neon","inverno","verao","outono","primavera","patria"}
+        if v not in allowed: raise ValueError("Tema inválido")
+        return v
     @field_validator("avatar_url")
     @classmethod
     def avatar_policy(cls, v): return safe_public_url(v) if v is not None else v
@@ -156,7 +163,7 @@ async def security_gate(request: Request, call_next):
         return response
     except HTTPException as e: return JSONResponse({"detail": e.detail}, status_code=e.status_code, headers={"X-Content-Type-Options":"nosniff"})
 
-def public_user(u): return {"id":str(u.id),"pseudonym":u.pseudonym,"bio":u.bio,"avatar_url":u.avatar_url,"badge":u.badge,"kaye_enabled":u.kaye_enabled}
+def public_user(u): return {"id":str(u.id),"pseudonym":u.pseudonym,"bio":u.bio,"avatar_url":u.avatar_url,"badge":u.badge,"theme":getattr(u,"theme","noir"),"kaye_enabled":u.kaye_enabled}
 def notification_json(n): return {"id":str(n.id),"kind":n.kind,"title":n.title,"body":n.body,"url":n.url,"read":n.read_at is not None,"created_at":n.created_at}
 def provision_official(s):
     official=s.exec(select(User).where(User.pseudonym=="KayepadOficial")).first()
@@ -195,6 +202,12 @@ def work_json(s,w):
 @app.on_event("startup")
 def startup():
     SQLModel.metadata.create_all(engine)
+    # Safe additive migration for installations created before profile themes.
+    with engine.begin() as conn:
+        columns=conn.execute(text("SELECT column_name FROM information_schema.columns WHERE table_name='kp_users' AND column_name='theme'")) if not sqlite else conn.execute(text("PRAGMA table_info(kp_users)"))
+        names={row[1] if sqlite else row[0] for row in columns}
+        if "theme" not in names:
+            conn.execute(text("ALTER TABLE kp_users ADD COLUMN theme VARCHAR(20) NOT NULL DEFAULT 'noir'"))
     with Session(engine) as s:
         provision_official(s); s.commit()
 @app.get("/health")
@@ -242,7 +255,10 @@ def me(u=Depends(current_user)):
 def patch_me(data: ProfilePatch,u=Depends(current_user)):
     with Session(engine) as s:
         db=s.get(User,u.id)
-        for k,v in data.model_dump(exclude_none=True).items(): setattr(db,k,v)
+        updates=data.model_dump(exclude_none=True)
+        if "pseudonym" in updates and updates["pseudonym"] != db.pseudonym:
+            if s.exec(select(User).where(User.pseudonym==updates["pseudonym"], User.id!=db.id)).first(): raise HTTPException(409,"Pseudônimo já cadastrado")
+        for k,v in updates.items(): setattr(db,k,v)
         s.add(db); s.commit(); s.refresh(db); return public_user(db)
 @app.get("/works")
 def works(limit:int=Query(20,ge=1,le=100),offset:int=Query(0,ge=0)):
