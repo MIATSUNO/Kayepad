@@ -5,7 +5,7 @@ from uuid import UUID, uuid4
 from urllib.parse import urlparse
 from fastapi import FastAPI, Depends, HTTPException, Header, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, HTMLResponse
 from pydantic import BaseModel, EmailStr, Field as PField, field_validator
 from sqlmodel import SQLModel, Field, Session, create_engine, select
 from sqlalchemy import text, UniqueConstraint
@@ -89,6 +89,13 @@ class Notification(SQLModel, table=True):
     id: UUID = Field(default_factory=uuid4, primary_key=True); recipient_id: UUID = Field(index=True); actor_id: Optional[UUID] = None
     kind: str = Field(max_length=20); title: str = Field(max_length=160); body: str = Field(max_length=1000); url: str = Field(default="", max_length=500)
     read_at: Optional[datetime] = None; created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+class AuditEvent(SQLModel, table=True):
+    __tablename__ = "kp_audit_events"
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    action: str = Field(max_length=80, index=True); target_id: Optional[UUID] = Field(default=None, index=True)
+    actor: str = Field(default="admin", max_length=80); ip_hash: str = Field(default="", max_length=128)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC), index=True)
+
 class PushSubscription(SQLModel, table=True):
     __tablename__ = "kp_push_subscriptions"
     id: UUID = Field(default_factory=uuid4, primary_key=True); user_id: UUID = Field(index=True); endpoint: str = Field(max_length=2000); p256dh: str = Field(max_length=500); auth: str = Field(max_length=500); created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
@@ -154,6 +161,7 @@ def notification_json(n): return {"id":str(n.id),"kind":n.kind,"title":n.title,"
 def provision_official(s):
     official=s.exec(select(User).where(User.pseudonym=="KayepadOficial")).first()
     if not official:
+        # No recoverable credential is stored or returned; this account is content-only.
         official=User(email="official@kayepad.invalid", pseudonym="KayepadOficial", password_hash=hash_password(secrets.token_urlsafe(48)), badge="official_gold", email_verified=True)
         s.add(official); s.flush()
     return official
@@ -174,6 +182,12 @@ def current_user(authorization: Optional[str] = Header(None)):
 def admin_key(x_admin_key: Optional[str]=Header(None)):
     key=os.getenv("ADMIN_API_KEY")
     if not key or not x_admin_key or not secrets.compare_digest(key,x_admin_key): raise HTTPException(403,"Acesso administrativo negado")
+
+def audit(s, action: str, target_id=None, request: Request | None=None):
+    # Store only a keyed digest of the address; raw IPs never enter the database or logs.
+    raw = request.client.host if request and request.client else "unknown"
+    digest = hashlib.sha256((os.getenv("IP_HASH_SALT", "kayepad-privacy") + raw).encode()).hexdigest()
+    s.add(AuditEvent(action=action, target_id=target_id, ip_hash=digest))
 
 def work_json(s,w):
     a=s.get(User,w.user_id); votes=len(s.exec(select(Vote).where(Vote.work_id==w.id)).all())
@@ -196,6 +210,7 @@ def signup(data: Signup):
     normalized_email = str(data.email).lower()
     with Session(engine) as s:
         if data.pseudonym.casefold()=="kayepadoficial" or s.exec(select(User).where((User.email==normalized_email) | (User.pseudonym==data.pseudonym))).first(): raise HTTPException(409,"E-mail ou pseudônimo já cadastrado")
+        # Signup, official follow and welcome message are one database transaction.
         official=provision_official(s)
         u=User(email=normalized_email,pseudonym=data.pseudonym,password_hash=hash_password(data.password)); s.add(u); s.flush()
         s.add(Follow(follower_id=u.id, followed_id=official.id))
@@ -327,8 +342,23 @@ def kaye(data:KayeIn,u=Depends(current_user)):
     return {"answer":answer}
 class OfficialUpdate(BaseModel):
     title:str=PField(min_length=1,max_length=160); body:str=PField(min_length=1,max_length=1000); url:str=PField(default="",max_length=500)
+@app.get("/admin", response_class=HTMLResponse)
+def admin_page(_=Depends(admin_key)):
+    # Deliberately lives on the API origin and is never linked or copied to Neocities.
+    return HTMLResponse("""<!doctype html><meta charset='utf-8'><title>Kayepad · Administração</title><style>body{font:16px system-ui;max-width:760px;margin:48px auto;padding:20px;color:#201a35}h1{color:#41258f}code{background:#f0ecfa;padding:3px 6px;border-radius:4px}</style><h1>Kayepad · Administração</h1><p>Área protegida. Use a API autenticada para usuários, moderação, auditoria e controles de privacidade.</p><p>Endpoints: <code>GET /admin/users</code> · <code>GET /admin/audit</code> · <code>GET /admin/rate-controls</code></p>""")
+
+@app.get("/admin/audit")
+def admin_audit(limit:int=Query(100,ge=1,le=500),_=Depends(admin_key)):
+    with Session(engine) as s:
+        return [{"action":e.action,"target_id":str(e.target_id) if e.target_id else None,"actor":e.actor,"ip_hash":e.ip_hash,"created_at":e.created_at} for e in s.exec(select(AuditEvent).order_by(AuditEvent.created_at.desc()).limit(limit)).all()]
+
+@app.get("/admin/rate-controls")
+def admin_rate_controls(_=Depends(admin_key)):
+    # Counts only: no raw address or identifying request history is exposed.
+    return {"active_buckets":len(_requests),"limit_per_minute":int(os.getenv("RATE_LIMIT_PER_MINUTE","120")),"ip_storage":"keyed_sha256_only"}
+
 @app.post("/admin/official/notify")
-def official_notify(data:OfficialUpdate,_=Depends(admin_key)):
+def official_notify(data:OfficialUpdate,_=Depends(admin_key)): 
     with Session(engine) as s:
         official=provision_official(s)
         users=s.exec(select(User).where(User.id!=official.id,User.banned==False)).all()
@@ -348,17 +378,17 @@ def verify_email(user_id:UUID,_=Depends(admin_key)):
         if not u: raise HTTPException(404,"Usuário não encontrado")
         u.email_verified=True; s.add(u); s.commit(); refresh_verified(s,u); return public_user(u)
 @app.post("/admin/comments/{comment_id}/hide")
-def hide_comment(comment_id:UUID,_=Depends(admin_key)):
+def hide_comment(comment_id:UUID,request:Request,_=Depends(admin_key)):
     with Session(engine) as s:
         c=s.get(Comment,comment_id)
         if not c: raise HTTPException(404,"Comentário não encontrado")
-        c.hidden=True; s.add(c); s.commit(); return {"id":str(c.id),"hidden":True}
+        c.hidden=True; s.add(c); audit(s,"comment.hide",c.id,request); s.commit(); return {"id":str(c.id),"hidden":True}
 @app.post("/admin/users/{user_id}/ban")
-def ban(user_id:UUID,_=Depends(admin_key)):
+def ban(user_id:UUID,request:Request,_=Depends(admin_key)):
     with Session(engine) as s:
         u=s.get(User,user_id)
         if not u: raise HTTPException(404,"Usuário não encontrado")
-        u.banned=True; s.add(u); s.commit(); return {"id":str(u.id),"banned":True}
+        u.banned=True; s.add(u); audit(s,"user.ban",u.id,request); s.commit(); return {"id":str(u.id),"banned":True}
 @app.get("/admin/users")
 def admin_users(_=Depends(admin_key)):
     with Session(engine) as s: return [public_user(u) for u in s.exec(select(User).order_by(User.created_at.desc())).all()]
