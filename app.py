@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, EmailStr, Field as PField, field_validator
 from sqlmodel import SQLModel, Field, Session, create_engine, select
 from sqlalchemy import text, UniqueConstraint
+from sqlalchemy.exc import IntegrityError
 import bcrypt
 
 UTC = timezone.utc
@@ -80,6 +81,18 @@ class Comment(SQLModel, table=True):
 class Game(SQLModel, table=True):
     __tablename__ = "kp_games"
     id: UUID = Field(default_factory=uuid4, primary_key=True); kind: str = Field(max_length=30); prompt: str = Field(max_length=1000); answer: str = Field(max_length=1000); cover_url: str = ""; active: bool = True
+class Follow(SQLModel, table=True):
+    __tablename__ = "kp_follows"
+    follower_id: UUID = Field(primary_key=True); followed_id: UUID = Field(primary_key=True); created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+class Notification(SQLModel, table=True):
+    __tablename__ = "kp_notifications"
+    id: UUID = Field(default_factory=uuid4, primary_key=True); recipient_id: UUID = Field(index=True); actor_id: Optional[UUID] = None
+    kind: str = Field(max_length=20); title: str = Field(max_length=160); body: str = Field(max_length=1000); url: str = Field(default="", max_length=500)
+    read_at: Optional[datetime] = None; created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+class PushSubscription(SQLModel, table=True):
+    __tablename__ = "kp_push_subscriptions"
+    id: UUID = Field(default_factory=uuid4, primary_key=True); user_id: UUID = Field(index=True); endpoint: str = Field(max_length=2000); p256dh: str = Field(max_length=500); auth: str = Field(max_length=500); created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    __table_args__ = (UniqueConstraint("user_id", "endpoint", name="uq_kp_push_user_endpoint"),)
 
 def reject_malicious(value: str) -> str:
     if SUSPICIOUS_INPUT.search(value): raise ValueError("Conteúdo não permitido")
@@ -137,6 +150,13 @@ async def security_gate(request: Request, call_next):
     except HTTPException as e: return JSONResponse({"detail": e.detail}, status_code=e.status_code, headers={"X-Content-Type-Options":"nosniff"})
 
 def public_user(u): return {"id":str(u.id),"pseudonym":u.pseudonym,"bio":u.bio,"avatar_url":u.avatar_url,"badge":u.badge,"kaye_enabled":u.kaye_enabled}
+def notification_json(n): return {"id":str(n.id),"kind":n.kind,"title":n.title,"body":n.body,"url":n.url,"read":n.read_at is not None,"created_at":n.created_at}
+def provision_official(s):
+    official=s.exec(select(User).where(User.pseudonym=="KayepadOficial")).first()
+    if not official:
+        official=User(email="official@kayepad.invalid", pseudonym="KayepadOficial", password_hash=hash_password(secrets.token_urlsafe(48)), badge="official_gold", email_verified=True)
+        s.add(official); s.flush()
+    return official
 def issue(u):
     raw = secrets.token_urlsafe(48); h = hashlib.sha256(raw.encode()).hexdigest()
     with Session(engine) as s: s.add(SessionToken(user_id=u.id, token_hash=h, expires_at=datetime.now(UTC)+timedelta(days=30))); s.commit()
@@ -159,7 +179,10 @@ def work_json(s,w):
     a=s.get(User,w.user_id); votes=len(s.exec(select(Vote).where(Vote.work_id==w.id)).all())
     return {"id":str(w.id),"title":w.title,"excerpt":w.excerpt,"cover_url":w.cover_url,"chapters":w.chapters,"reads":w.reads,"votes":votes,"author":a.pseudonym if a else "", "badge":a.badge if a else "normal"}
 @app.on_event("startup")
-def startup(): SQLModel.metadata.create_all(engine)
+def startup():
+    SQLModel.metadata.create_all(engine)
+    with Session(engine) as s:
+        provision_official(s); s.commit()
 @app.get("/health")
 def health(): return {"status":"ok","service":"kayepad-api","time":datetime.now(UTC)}
 @app.get("/ready")
@@ -172,8 +195,12 @@ def ready():
 def signup(data: Signup):
     normalized_email = str(data.email).lower()
     with Session(engine) as s:
-        if s.exec(select(User).where((User.email==normalized_email) | (User.pseudonym==data.pseudonym))).first(): raise HTTPException(409,"E-mail ou pseudônimo já cadastrado")
-        u=User(email=normalized_email,pseudonym=data.pseudonym,password_hash=hash_password(data.password)); s.add(u); s.commit(); s.refresh(u); return {"user":public_user(u),"token":issue(u)}
+        if data.pseudonym.casefold()=="kayepadoficial" or s.exec(select(User).where((User.email==normalized_email) | (User.pseudonym==data.pseudonym))).first(): raise HTTPException(409,"E-mail ou pseudônimo já cadastrado")
+        official=provision_official(s)
+        u=User(email=normalized_email,pseudonym=data.pseudonym,password_hash=hash_password(data.password)); s.add(u); s.flush()
+        s.add(Follow(follower_id=u.id, followed_id=official.id))
+        s.add(Notification(recipient_id=u.id, actor_id=official.id, kind="welcome", title="Bem-vindo à Kayepad", body="Que bom ter você aqui. Comece seguindo histórias e deixando sua própria voz encontrar caminhos.", url="/poficial"))
+        s.commit(); s.refresh(u); return {"user":public_user(u),"token":issue(u)}
 @app.post("/auth/login")
 def login(data: Login):
     with Session(engine) as s: u=s.exec(select(User).where(User.email==str(data.email).lower())).first()
@@ -209,7 +236,11 @@ def works(limit:int=Query(20,ge=1,le=100),offset:int=Query(0,ge=0)):
 def create_work(data: WorkIn, u=Depends(current_user)):
     with Session(engine) as s:
         w=Work(user_id=u.id, title=data.title.strip(), excerpt=data.excerpt.strip(), cover_url=data.cover_url.strip(), chapters=data.chapters)
-        s.add(w); s.commit(); s.refresh(w); return work_json(s,w)
+        s.add(w); s.flush()
+        followers_ids=[f.follower_id for f in s.exec(select(Follow).where(Follow.followed_id==u.id)).all()]
+        for recipient in followers_ids:
+            s.add(Notification(recipient_id=recipient,actor_id=u.id,kind="post",title=f"{u.pseudonym} publicou uma obra",body=data.title.strip(),url=f"/works/{w.id}"))
+        s.commit(); s.refresh(w); return work_json(s,w)
 @app.post("/works/{work_id}/read")
 def read(work_id:UUID):
     with Session(engine) as s:
@@ -231,6 +262,58 @@ def add_comment(work_id:UUID,data:CommentIn,u=Depends(current_user)):
     with Session(engine) as s:
         if not s.get(Work,work_id): raise HTTPException(404,"Obra não encontrada")
         c=Comment(work_id=work_id,user_id=u.id,body=data.body.strip()); s.add(c); s.commit(); s.refresh(c); return {"id":str(c.id),"body":c.body,"created_at":c.created_at}
+@app.get("/users/{user_id}/followers")
+def followers(user_id:UUID, limit:int=Query(50,ge=1,le=100)):
+    with Session(engine) as s:
+        if not s.get(User,user_id): raise HTTPException(404,"Usuário não encontrado")
+        return [public_user(u) for u in [s.get(User,f.follower_id) for f in s.exec(select(Follow).where(Follow.followed_id==user_id).order_by(Follow.created_at.desc()).limit(limit)).all()] if u]
+@app.get("/users/{user_id}/following")
+def following(user_id:UUID, limit:int=Query(50,ge=1,le=100)):
+    with Session(engine) as s:
+        if not s.get(User,user_id): raise HTTPException(404,"Usuário não encontrado")
+        return [public_user(u) for u in [s.get(User,f.followed_id) for f in s.exec(select(Follow).where(Follow.follower_id==user_id).order_by(Follow.created_at.desc()).limit(limit)).all()] if u]
+@app.post("/users/{user_id}/follow")
+def follow(user_id:UUID, u=Depends(current_user)):
+    if user_id==u.id: raise HTTPException(400,"Você não pode seguir a si mesmo")
+    with Session(engine) as s:
+        target=s.get(User,user_id)
+        if not target or target.banned: raise HTTPException(404,"Usuário não encontrado")
+        if s.exec(select(Follow).where(Follow.follower_id==u.id,Follow.followed_id==user_id)).first(): return {"following":True}
+        try:
+            s.add(Follow(follower_id=u.id,followed_id=user_id)); s.add(Notification(recipient_id=user_id,actor_id=u.id,kind="follow",title="Novo seguidor",body=f"{u.pseudonym} começou a seguir você.",url=f"/perfil/{u.id}")); s.commit()
+        except IntegrityError: s.rollback()
+        return {"following":True}
+@app.delete("/users/{user_id}/follow")
+def unfollow(user_id:UUID, u=Depends(current_user)):
+    with Session(engine) as s:
+        f=s.exec(select(Follow).where(Follow.follower_id==u.id,Follow.followed_id==user_id)).first()
+        if f: s.delete(f); s.commit()
+        return {"following":False}
+@app.get("/me/following")
+def my_following(u=Depends(current_user)): return following(u.id,50)
+@app.get("/notifications")
+def notifications(limit:int=Query(50,ge=1,le=100), u=Depends(current_user)):
+    with Session(engine) as s: return [notification_json(n) for n in s.exec(select(Notification).where(Notification.recipient_id==u.id).order_by(Notification.created_at.desc()).limit(limit)).all()]
+@app.post("/notifications/{notification_id}/read")
+def mark_notification_read(notification_id:UUID,u=Depends(current_user)):
+    with Session(engine) as s:
+        n=s.get(Notification,notification_id)
+        if not n or n.recipient_id!=u.id: raise HTTPException(404,"Notificação não encontrada")
+        n.read_at=datetime.now(UTC); s.add(n); s.commit(); return notification_json(n)
+class PushIn(BaseModel): endpoint:str=PField(min_length=10,max_length=2000); p256dh:str=PField(min_length=10,max_length=500); auth:str=PField(min_length=5,max_length=500)
+@app.post("/push/subscriptions")
+def save_push(data:PushIn,u=Depends(current_user)):
+    with Session(engine) as s:
+        p=s.exec(select(PushSubscription).where(PushSubscription.user_id==u.id,PushSubscription.endpoint==data.endpoint)).first()
+        if p: p.p256dh=data.p256dh; p.auth=data.auth
+        else: p=PushSubscription(user_id=u.id,**data.model_dump()); s.add(p)
+        s.commit(); return {"ok":True,"push":"stored"}
+@app.delete("/push/subscriptions")
+def delete_push(data:PushIn,u=Depends(current_user)):
+    with Session(engine) as s:
+        p=s.exec(select(PushSubscription).where(PushSubscription.user_id==u.id,PushSubscription.endpoint==data.endpoint)).first()
+        if p: s.delete(p); s.commit()
+        return {"ok":True}
 @app.get("/reels")
 def reels(limit:int=Query(30,ge=1,le=100)): return works(limit,0)
 @app.get("/games")
@@ -242,9 +325,18 @@ def kaye(data:KayeIn,u=Depends(current_user)):
     msg=data.message.lower(); replies=[("perfil","Você pode atualizar bio, avatar e a preferência da Kaye em /me."),("config","Abra suas configurações para controlar a Kaye e seu perfil."),("post","Para publicar uma obra, use o endpoint de obras autenticado."),("vot","Você pode votar uma vez em cada obra."),("coment","Comentários devem respeitar a comunidade e têm limite de 2.000 caracteres.")]
     answer=next((r for k,r in replies if k in msg),"Posso ajudar com perfil, configurações, posts, comentários e interações. Diga o que você precisa.")
     return {"answer":answer}
+class OfficialUpdate(BaseModel):
+    title:str=PField(min_length=1,max_length=160); body:str=PField(min_length=1,max_length=1000); url:str=PField(default="",max_length=500)
+@app.post("/admin/official/notify")
+def official_notify(data:OfficialUpdate,_=Depends(admin_key)):
+    with Session(engine) as s:
+        official=provision_official(s)
+        users=s.exec(select(User).where(User.id!=official.id,User.banned==False)).all()
+        for user in users: s.add(Notification(recipient_id=user.id,actor_id=official.id,kind="official",title=data.title,body=data.body,url=data.url))
+        s.commit(); return {"sent":len(users)}
 @app.post("/admin/users/{user_id}/badge")
 def set_badge(user_id:UUID,data:BadgeIn,_=Depends(admin_key)):
-    if data.badge not in {"normal","support","ambassador","partner","verified"}: raise HTTPException(400,"Selo inválido")
+    if data.badge not in {"normal","support","ambassador","partner","verified","official_gold"}: raise HTTPException(400,"Selo inválido")
     with Session(engine) as s:
         u=s.get(User,user_id)
         if not u: raise HTTPException(404,"Usuário não encontrado")
