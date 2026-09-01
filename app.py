@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, HTMLResponse
 from pydantic import BaseModel, EmailStr, Field as PField, field_validator
 from sqlmodel import SQLModel, Field, Session, create_engine, select
-from sqlalchemy import text, UniqueConstraint
+from sqlalchemy import text, UniqueConstraint, inspect
 from sqlalchemy.exc import IntegrityError
 import bcrypt
 
@@ -217,13 +217,19 @@ def work_json(s,w):
     return {"id":str(w.id),"title":w.title,"excerpt":w.excerpt,"cover_url":w.cover_url,"chapters":w.chapters,"reads":w.reads,"votes":votes,"author":a.pseudonym if a else "", "badge":a.badge if a else "normal"}
 @app.on_event("startup")
 def startup():
+    # Keep startup compatible with both a fresh SQLite database and an existing
+    # Supabase/PostgreSQL schema.  create_all is intentionally additive; the
+    # inspector avoids querying information_schema directly (which can resolve
+    # the wrong schema with pooled connections or restricted DB roles).
     SQLModel.metadata.create_all(engine)
-    # Safe additive migration for installations created before profile themes.
-    with engine.begin() as conn:
-        columns=conn.execute(text("SELECT column_name FROM information_schema.columns WHERE table_name='kp_users' AND column_name='theme'")) if not sqlite else conn.execute(text("PRAGMA table_info(kp_users)"))
-        names={row[1] if sqlite else row[0] for row in columns}
-        if "theme" not in names:
-            conn.execute(text("ALTER TABLE kp_users ADD COLUMN theme VARCHAR(20) NOT NULL DEFAULT 'noir'"))
+    inspector = inspect(engine)
+    user_columns = {column["name"] for column in inspector.get_columns("kp_users")}
+    if "theme" not in user_columns:
+        with engine.begin() as conn:
+            if sqlite:
+                conn.execute(text("ALTER TABLE kp_users ADD COLUMN theme VARCHAR(20) NOT NULL DEFAULT 'noir'"))
+            else:
+                conn.execute(text("ALTER TABLE kp_users ADD COLUMN IF NOT EXISTS theme VARCHAR(20) NOT NULL DEFAULT 'noir'"))
     with Session(engine) as s:
         provision_official(s); s.commit()
 @app.get("/health")
