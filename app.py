@@ -1,9 +1,9 @@
-import os, secrets, hashlib, ipaddress, re
+import os, secrets, hashlib, ipaddress, re, json, asyncio
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 from uuid import UUID, uuid4
 from urllib.parse import urlparse
-from fastapi import FastAPI, Depends, HTTPException, Header, Query, Request
+from fastapi import FastAPI, Depends, HTTPException, Header, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, HTMLResponse
 from pydantic import BaseModel, EmailStr, Field as PField, field_validator
@@ -100,6 +100,22 @@ class PushSubscription(SQLModel, table=True):
     __tablename__ = "kp_push_subscriptions"
     id: UUID = Field(default_factory=uuid4, primary_key=True); user_id: UUID = Field(index=True); endpoint: str = Field(max_length=2000); p256dh: str = Field(max_length=500); auth: str = Field(max_length=500); created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     __table_args__ = (UniqueConstraint("user_id", "endpoint", name="uq_kp_push_user_endpoint"),)
+
+class WritingRoom(SQLModel, table=True):
+    __tablename__ = "kp_writing_rooms"
+    id: UUID = Field(default_factory=uuid4, primary_key=True); owner_id: UUID = Field(index=True)
+    title: str = Field(max_length=120); status: str = Field(default="open", max_length=20)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC)); closed_at: Optional[datetime] = None
+class RoomParticipant(SQLModel, table=True):
+    __tablename__ = "kp_room_participants"
+    room_id: UUID = Field(primary_key=True); user_id: UUID = Field(primary_key=True, index=True)
+    role: str = Field(default="editor", max_length=20); accepted: bool = False
+    joined_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+class RoomInvite(SQLModel, table=True):
+    __tablename__ = "kp_room_invites"
+    id: UUID = Field(default_factory=uuid4, primary_key=True); room_id: UUID = Field(index=True); inviter_id: UUID = Field(index=True); invitee_id: UUID = Field(index=True)
+    status: str = Field(default="pending", max_length=20); created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    __table_args__ = (UniqueConstraint("room_id", "invitee_id", name="uq_kp_room_invite"),)
 
 def reject_malicious(value: str) -> str:
     if SUSPICIOUS_INPUT.search(value): raise ValueError("Conteúdo não permitido")
@@ -235,7 +251,49 @@ def login(data: Login):
     if not u or not verify_password(data.password,u.password_hash): raise HTTPException(401,"Credenciais inválidas")
     if u.banned: raise HTTPException(403,"Conta banida")
     return {"user":public_user(u),"token":issue(u)}
-@app.post("/auth/logout")
+class DeleteMeIn(BaseModel):
+    confirmation: str = PField(min_length=6, max_length=20)
+
+@app.delete("/me")
+def delete_me(data: DeleteMeIn, request: Request, u=Depends(current_user)):
+    if data.confirmation != "DELETE":
+        raise HTTPException(400, "Confirmação inválida; envie confirmation=DELETE")
+    with Session(engine) as s:
+        db=s.get(User,u.id)
+        if not db: raise HTTPException(404, "Conta não encontrada")
+        # Explicit deletion keeps this safe on older SQLite installations without FK cascades.
+        work_ids=[w.id for w in s.exec(select(Work).where(Work.user_id==db.id)).all()]
+        owned_room_ids=[r.id for r in s.exec(select(WritingRoom).where(WritingRoom.owner_id==db.id)).all()]
+        for rid in owned_room_ids:
+            for model in (RoomParticipant, RoomInvite):
+                for row in s.exec(select(model).where(model.room_id==rid)).all(): s.delete(row)
+            room=s.get(WritingRoom,rid)
+            if room: s.delete(room)
+        for model, predicate in [(Vote, Vote.user_id==db.id), (Comment, Comment.user_id==db.id),
+            (Follow, (Follow.follower_id==db.id) | (Follow.followed_id==db.id)),
+            (Notification, (Notification.recipient_id==db.id) | (Notification.actor_id==db.id)),
+            (PushSubscription, PushSubscription.user_id==db.id), (RoomParticipant, RoomParticipant.user_id==db.id),
+            (RoomInvite, (RoomInvite.inviter_id==db.id) | (RoomInvite.invitee_id==db.id))]:
+            for row in s.exec(select(model).where(predicate)).all(): s.delete(row)
+        for wid in work_ids:
+            for model in (Vote, Comment):
+                for row in s.exec(select(model).where(model.work_id==wid)).all(): s.delete(row)
+            work=s.get(Work,wid)
+            if work: s.delete(work)
+        for st in s.exec(select(SessionToken).where(SessionToken.user_id==db.id)).all(): s.delete(st)
+        audit(s, "user.delete", db.id, request)
+        s.delete(db); s.commit()
+    return {"ok": True, "deleted": True}
+
+@app.post("/me/sessions/revoke")
+def revoke_sessions(u=Depends(current_user)):
+    with Session(engine) as s:
+        sessions=s.exec(select(SessionToken).where(SessionToken.user_id==u.id, SessionToken.revoked==False)).all()
+        for st in sessions: st.revoked=True; s.add(st)
+        s.commit()
+    return {"ok": True, "revoked": len(sessions)}
+
+@app.delete("/auth/logout")
 def logout(authorization: Optional[str]=Header(None), u=Depends(current_user)):
     if authorization:
         with Session(engine) as s:
@@ -272,6 +330,16 @@ def create_work(data: WorkIn, u=Depends(current_user)):
         for recipient in followers_ids:
             s.add(Notification(recipient_id=recipient,actor_id=u.id,kind="post",title=f"{u.pseudonym} publicou uma obra",body=data.title.strip(),url=f"/works/{w.id}"))
         s.commit(); s.refresh(w); return work_json(s,w)
+@app.delete("/works/{work_id}")
+def delete_work(work_id: UUID, request: Request, u=Depends(current_user)):
+    with Session(engine) as s:
+        w=s.get(Work, work_id)
+        if not w: raise HTTPException(404, "Obra não encontrada")
+        if w.user_id != u.id: raise HTTPException(403, "Somente o proprietário pode excluir a obra")
+        for model in (Vote, Comment):
+            for row in s.exec(select(model).where(model.work_id==work_id)).all(): s.delete(row)
+        s.delete(w); audit(s, "work.delete", work_id, request); s.commit()
+    return {"ok": True, "deleted": True}
 @app.post("/works/{work_id}/read")
 def read(work_id:UUID):
     with Session(engine) as s:
@@ -346,6 +414,33 @@ def delete_push(data:PushIn,u=Depends(current_user)):
         p=s.exec(select(PushSubscription).where(PushSubscription.user_id==u.id,PushSubscription.endpoint==data.endpoint)).first()
         if p: s.delete(p); s.commit()
         return {"ok":True}
+
+def dispatch_push(user_id: UUID, payload: dict) -> dict:
+    """Best-effort provider worker; subscriptions are pruned on permanent endpoint failure."""
+    public=os.getenv("VAPID_PUBLIC_KEY"); private=os.getenv("VAPID_PRIVATE_KEY"); subject=os.getenv("VAPID_SUBJECT", "mailto:admin@kayepad.invalid")
+    if not public or not private: return {"configured": False, "sent": 0, "failed": 0}
+    try:
+        from pywebpush import webpush, WebPushException
+    except ImportError: return {"configured": False, "sent": 0, "failed": 0, "reason": "pywebpush_not_installed"}
+    sent=failed=0
+    with Session(engine) as s:
+        subs=s.exec(select(PushSubscription).where(PushSubscription.user_id==user_id)).all()
+        for sub in subs:
+            try:
+                webpush(subscription_info={"endpoint":sub.endpoint,"keys":{"p256dh":sub.p256dh,"auth":sub.auth}}, data=json.dumps(payload), vapid_private_key=private, vapid_claims={"sub":subject})
+                sent += 1
+            except WebPushException as exc:
+                failed += 1
+                if getattr(exc, "response", None) is not None and getattr(exc.response, "status_code", 0) in {404,410}: s.delete(sub)
+        s.commit()
+    return {"configured": True, "sent": sent, "failed": failed}
+@app.get("/push/status")
+def push_status(u=Depends(current_user)):
+    with Session(engine) as s: count=len(s.exec(select(PushSubscription).where(PushSubscription.user_id==u.id)).all())
+    return {"configured": bool(os.getenv("VAPID_PUBLIC_KEY") and os.getenv("VAPID_PRIVATE_KEY")), "subscriptions": count, "vapid_public_key": os.getenv("VAPID_PUBLIC_KEY", "")}
+@app.post("/push/test")
+def push_test(u=Depends(current_user)):
+    return dispatch_push(u.id, {"title":"Kayepad", "body":"Teste de notificações push", "url":"/"})
 @app.get("/reels")
 def reels(limit:int=Query(30,ge=1,le=100)): return works(limit,0)
 @app.get("/games")
@@ -357,6 +452,103 @@ def kaye(data:KayeIn,u=Depends(current_user)):
     msg=data.message.lower(); replies=[("perfil","Você pode atualizar bio, avatar e a preferência da Kaye em /me."),("config","Abra suas configurações para controlar a Kaye e seu perfil."),("post","Para publicar uma obra, use o endpoint de obras autenticado."),("vot","Você pode votar uma vez em cada obra."),("coment","Comentários devem respeitar a comunidade e têm limite de 2.000 caracteres.")]
     answer=next((r for k,r in replies if k in msg),"Posso ajudar com perfil, configurações, posts, comentários e interações. Diga o que você precisa.")
     return {"answer":answer}
+
+class RoomIn(BaseModel):
+    title: str = PField(min_length=1, max_length=120)
+    _safe = field_validator("title")(reject_malicious)
+class InviteIn(BaseModel): invitee_id: UUID
+class PermissionIn(BaseModel): role: str
+_room_activity = {}
+_room_connections: dict[str, set[WebSocket]] = {}
+
+def room_member(s, room_id, user_id, accepted=True):
+    return s.exec(select(RoomParticipant).where(RoomParticipant.room_id==room_id, RoomParticipant.user_id==user_id, RoomParticipant.accepted==accepted)).first()
+def room_json(s, room):
+    parts=s.exec(select(RoomParticipant).where(RoomParticipant.room_id==room.id, RoomParticipant.accepted==True)).all()
+    return {"id":str(room.id),"title":room.title,"owner_id":str(room.owner_id),"status":room.status,"participants":[{"user_id":str(p.user_id),"role":p.role} for p in parts],"created_at":room.created_at}
+@app.post("/rooms")
+def create_room(data: RoomIn, u=Depends(current_user)):
+    with Session(engine) as s:
+        room=WritingRoom(owner_id=u.id,title=data.title.strip()); s.add(room); s.flush(); s.add(RoomParticipant(room_id=room.id,user_id=u.id,role="owner",accepted=True)); s.commit(); s.refresh(room); return room_json(s,room)
+@app.post("/rooms/{room_id}/invites")
+def invite_room(room_id: UUID, data: InviteIn, u=Depends(current_user)):
+    with Session(engine) as s:
+        room=s.get(WritingRoom,room_id)
+        if not room or room.status!="open": raise HTTPException(404,"Sala não encontrada ou fechada")
+        if room.owner_id != u.id: raise HTTPException(403,"Somente o proprietário pode convidar")
+        max_participants=int(os.getenv("ROOM_MAX_PARTICIPANTS", "8"))
+        participant_count=len(s.exec(select(RoomParticipant).where(RoomParticipant.room_id==room_id,RoomParticipant.accepted==True)).all())
+        if participant_count >= max_participants: raise HTTPException(409,"Limite de participantes atingido")
+        now=datetime.now(UTC).timestamp(); activity=[t for t in _room_activity.get(u.id,[]) if now-t<60]
+        if len(activity)>=int(os.getenv("ROOM_INVITES_PER_MINUTE", "20")): raise HTTPException(429,"Limite de convites atingido")
+        activity.append(now); _room_activity[u.id]=activity
+        target=s.get(User,data.invitee_id)
+        mutual=s.exec(select(Follow).where(Follow.follower_id==u.id,Follow.followed_id==data.invitee_id)).first() and s.exec(select(Follow).where(Follow.follower_id==data.invitee_id,Follow.followed_id==u.id)).first()
+        if not target or target.banned or data.invitee_id==u.id or not mutual: raise HTTPException(403,"Convites exigem seguimento mútuo")
+        if s.exec(select(RoomParticipant).where(RoomParticipant.room_id==room_id,RoomParticipant.user_id==data.invitee_id)).first(): raise HTTPException(409,"Usuário já participa da sala")
+        existing=s.exec(select(RoomInvite).where(RoomInvite.room_id==room_id,RoomInvite.invitee_id==data.invitee_id,RoomInvite.status=="pending")).first()
+        if existing: return {"id":str(existing.id),"status":"pending"}
+        inv=RoomInvite(room_id=room_id,inviter_id=u.id,invitee_id=data.invitee_id); s.add(inv); s.commit(); return {"id":str(inv.id),"status":"pending"}
+@app.post("/rooms/invites/{invite_id}/{decision}")
+def decide_invite(invite_id: UUID, decision: str, u=Depends(current_user)):
+    if decision not in {"accept","decline"}: raise HTTPException(400,"Decisão inválida")
+    with Session(engine) as s:
+        inv=s.get(RoomInvite,invite_id)
+        if not inv or inv.invitee_id!=u.id or inv.status!="pending": raise HTTPException(404,"Convite não encontrado")
+        inv.status="accepted" if decision=="accept" else "declined"; s.add(inv)
+        if decision=="accept": s.add(RoomParticipant(room_id=inv.room_id,user_id=u.id,role="editor",accepted=True))
+        s.commit(); return {"ok":True,"status":inv.status}
+@app.get("/rooms")
+def list_rooms(u=Depends(current_user)):
+    with Session(engine) as s:
+        rooms=[s.get(WritingRoom,p.room_id) for p in s.exec(select(RoomParticipant).where(RoomParticipant.user_id==u.id,RoomParticipant.accepted==True)).all()]
+        return [room_json(s,r) for r in rooms if r]
+@app.get("/rooms/{room_id}")
+def get_room(room_id: UUID,u=Depends(current_user)):
+    with Session(engine) as s:
+        room=s.get(WritingRoom,room_id)
+        if not room or not room_member(s,room_id,u.id): raise HTTPException(404,"Sala não encontrada")
+        return room_json(s,room)
+@app.patch("/rooms/{room_id}/participants/{user_id}")
+def set_room_permission(room_id:UUID,user_id:UUID,data:PermissionIn,u=Depends(current_user)):
+    if data.role not in {"editor","viewer"}: raise HTTPException(400,"Permissão inválida")
+    with Session(engine) as s:
+        room=s.get(WritingRoom,room_id); p=s.exec(select(RoomParticipant).where(RoomParticipant.room_id==room_id,RoomParticipant.user_id==user_id)).first()
+        if not room or room.owner_id!=u.id or not p or user_id==room.owner_id: raise HTTPException(403,"Sem permissão")
+        p.role=data.role; s.add(p); s.commit(); return {"user_id":str(user_id),"role":p.role}
+@app.post("/rooms/{room_id}/close")
+def close_room(room_id:UUID,u=Depends(current_user)):
+    with Session(engine) as s:
+        room=s.get(WritingRoom,room_id)
+        if not room or room.owner_id!=u.id: raise HTTPException(403,"Sem permissão")
+        room.status="closed"; room.closed_at=datetime.now(UTC); s.add(room); s.commit(); return {"ok":True,"status":"closed"}
+@app.websocket("/rooms/{room_id}/ws")
+async def room_ws(websocket: WebSocket, room_id: UUID):
+    token=websocket.query_params.get("token",""); user_id=None
+    if token:
+        with Session(engine) as s:
+            st=s.exec(select(SessionToken).where(SessionToken.token_hash==hashlib.sha256(token.encode()).hexdigest(),SessionToken.revoked==False)).first()
+            if st and (st.expires_at.replace(tzinfo=UTC) if st.expires_at.tzinfo is None else st.expires_at)>datetime.now(UTC) and room_member(s,room_id,st.user_id): user_id=st.user_id
+    if not user_id: await websocket.close(code=4403); return
+    await websocket.accept(); key=str(room_id); _room_connections.setdefault(key,set()).add(websocket); times=[]
+    try:
+        while True:
+            text_message=await websocket.receive_text()
+            now=asyncio.get_running_loop().time(); times=[t for t in times if now-t<10]
+            if len(text_message.encode())>4096 or len(times)>=30: await websocket.close(code=4429); break
+            times.append(now)
+            # Relay metadata/content opaquely; never write message content to storage.
+            packet=json.loads(text_message)
+            if not isinstance(packet,dict): continue
+            packet={"type":str(packet.get("type","signal"))[:32],"from":str(user_id),"data":packet.get("data",{})}
+            for peer in list(_room_connections.get(key,set())):
+                if peer is not websocket:
+                    try: await peer.send_json(packet)
+                    except Exception: _room_connections[key].discard(peer)
+    except (WebSocketDisconnect, json.JSONDecodeError): pass
+    finally:
+        _room_connections.get(key,set()).discard(websocket)
+
 class OfficialUpdate(BaseModel):
     title:str=PField(min_length=1,max_length=160); body:str=PField(min_length=1,max_length=1000); url:str=PField(default="",max_length=500)
 @app.get("/admin", response_class=HTMLResponse)
