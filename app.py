@@ -6,6 +6,7 @@ from urllib.parse import urlparse
 from fastapi import FastAPI, Depends, HTTPException, Header, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, HTMLResponse
+from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, EmailStr, Field as PField, field_validator
 from sqlmodel import SQLModel, Field, Session, create_engine, select
 from sqlalchemy import text, UniqueConstraint, inspect
@@ -691,6 +692,19 @@ def ban(user_id:UUID,request:Request,_=Depends(admin_key)):
 @app.get("/admin/users")
 def admin_users(_=Depends(admin_key)):
     with Session(engine) as s: return [public_user(u) for u in s.exec(select(User).order_by(User.created_at.desc())).all()]
+@app.exception_handler(RequestValidationError)
+async def validation_error(request, exc):
+    messages=[]
+    for err in exc.errors():
+        loc=err.get("loc",[]); msg=str(err.get("msg","Dados inválidos"))
+        field=loc[-1] if loc else "campo"
+        if field=="password" and "maiúscula" in msg:
+            msg="A senha deve ter pelo menos 10 caracteres, incluindo uma letra maiúscula, uma letra minúscula e um número."
+        elif msg.startswith("Value error, "): msg=msg[13:]
+        elif err.get("type")=="value_error.email": msg="Informe um e-mail válido."
+        elif err.get("type")=="string_too_short": msg=f"O campo {field} está curto demais."
+        messages.append(msg)
+    return JSONResponse({"detail":" ".join(dict.fromkeys(messages)) or "Confira os dados informados."},status_code=422,headers={"X-Content-Type-Options":"nosniff"})
 @app.exception_handler(Exception)
 async def unhandled(request, exc):
     return JSONResponse({"detail":"Erro interno do servidor"},status_code=500)
