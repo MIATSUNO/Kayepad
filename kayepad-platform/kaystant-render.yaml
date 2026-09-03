@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: kaystant-api
+    runtime: docker
+    rootDir: kaystant-api
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: CORS_ORIGINS
+        value: "https://kayepad.neocities.org"
