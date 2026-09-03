@@ -1,12 +1,7 @@
 const API=window.KAYSTANT_API||'';
 const token=()=>localStorage.getItem('kaystant_token')||'';
 const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
-const fallback=[
- {user:'lua_de_papel',initial:'L',title:'A cidade depois da chuva',type:'Poesia',body:'Há lugares que só aparecem quando o barulho termina. Escrevi este para quem aprendeu a escutar o intervalo.',color:'#e97768',fill:72,tints:38},
- {user:'caderno.do.mar',initial:'C',title:'Sobre insistir nas primeiras tentativas',type:'Estudo/Pesquisa',body:'Uma pequena pesquisa sobre o que acontece quando deixamos de tratar o rascunho como fracasso.',color:'#5367d8',fill:49,tints:24},
- {user:'raiz_e_ensaio',initial:'R',title:'O que a leitura devolve',type:'Artigo científico',body:'Notas sobre memória, formação de repertório e os mundos que se abrem quando lemos devagar.',color:'#79a86d',fill:88,tints:57}
-];
-let posts=[...fallback];
+let posts=[];
 function toast(msg){const t=$('#toast');if(!t)return;t.textContent=msg;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2600)}
 function authHeaders(){return {'Content-Type':'application/json','Authorization':`Bearer ${token()}`}}
 function render(list=posts){const box=$('#post-list');if(!box)return;box.innerHTML=list.map((p,i)=>`<article class="post" data-id="${p.id||''}"><div class="post-avatar" style="background:${p.color||'#5367d8'}">${p.initial||'A'}</div><div class="post-copy"><div class="post-meta"><a href="profile.html?user=${encodeURIComponent(p.user)}">@${p.user}</a> · ${p.type} ${p.user!=='morveyn'?`<button class="follow-btn" data-follow="${p.user}">seguir</button>`:''}</div><h3>${p.title}</h3><p>${p.body}</p><div class="post-meta">${p.tints||0} tintas recebidas · agora</div></div><div class="post-actions"><div class="ink-meter" style="--post-color:${p.color||'#5367d8'};--fill:${p.fill||0}%"><i></i></div><span class="ink-label">${p.fill||0}%</span>${p.id?`<button class="ink-btn" data-ink="${p.id}" title="Deixar tinta">+ tinta</button>`:''}</div></article>`).join('');
@@ -25,4 +20,4 @@ $('#profile-save')?.addEventListener('click',async e=>{e.preventDefault();if(!to
 $('#publish')?.addEventListener('click',async e=>{e.preventDefault();if(!token()){toast('Entre para publicar ✦');return}const category={'Poesia':'poesia','Artigo científico':'artigo_cientifico','Estudo/Pesquisa':'estudo_pesquisa'}[$('#new-type')?.value||'Poesia'];try{const r=await fetch(API+'/posts',{method:'POST',headers:authHeaders(),body:JSON.stringify({title:$('#new-title').value,body:$('#new-body').value,category})});if(!r.ok)throw Error();toast('Publicação criada e pronta para receber tinta ✦');$('#write-modal').close();loadFeed()}catch(e){toast('Entre e preencha título e texto para publicar.')}});
 $('#filter')?.addEventListener('change',e=>{const v=e.target.value;render(v==='Poesias'?posts.filter(p=>p.type==='Poesia'):v==='Estudos e pesquisas'?posts.filter(p=>p.type!=='Poesia'):posts)});
 $$('.buy').forEach(b=>b.onclick=()=>toast('A compra será ligada à carteira na próxima atualização ✦'));
-if(token()){if($('#header-label'))$('#header-label').textContent='Minha conta';fetch(API+'/me',{headers:{Authorization:`Bearer ${token()}`}}).then(r=>r.ok?r.json():null).then(u=>{if(u){$('#header-label').textContent='@'+u.username;$('#header-coins').hidden=false;$('#header-coins').textContent=u.coins+' ◈';$('#header-avatar').textContent=(u.username||'K')[0].toUpperCase()}}).catch(()=>{})}render();setTimeout(()=>{if($('#post-list')&&!$('#post-list').children.length)render(posts)},120);loadFeed();
+if(token()){if($('#header-label'))$('#header-label').textContent='Minha conta';fetch(API+'/me',{headers:{Authorization:`Bearer ${token()}`}}).then(r=>r.ok?r.json():null).then(u=>{if(u){$('#header-label').textContent='@'+u.username;$('#header-coins').hidden=false;$('#header-coins').textContent=u.coins+' ◈';$('#header-avatar').textContent=(u.username||'K')[0].toUpperCase()}}).catch(()=>{})}render();loadFeed();
