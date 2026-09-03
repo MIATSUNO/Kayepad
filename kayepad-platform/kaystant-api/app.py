@@ -44,6 +44,7 @@ def startup():
   with engine.begin() as c:
    c.execute(text("ALTER TABLE kt_users ADD COLUMN IF NOT EXISTS display_name TEXT DEFAULT ''")); c.execute(text("ALTER TABLE kt_users ADD COLUMN IF NOT EXISTS show_display_name BOOLEAN DEFAULT TRUE")); c.execute(text("ALTER TABLE kt_users ADD COLUMN IF NOT EXISTS links_json TEXT DEFAULT '[]'")); c.execute(text("ALTER TABLE kt_users ADD COLUMN IF NOT EXISTS theme TEXT DEFAULT 'paper'")); c.execute(text("ALTER TABLE kt_users ADD COLUMN IF NOT EXISTS avatar_json TEXT DEFAULT '{}'"))
  SQLModel.metadata.create_all(engine)
+ with engine.begin() as c: c.execute(text("CREATE TABLE IF NOT EXISTS kt_password_resets (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, token_hash TEXT UNIQUE NOT NULL, expires_at TIMESTAMP NOT NULL, used BOOLEAN NOT NULL DEFAULT FALSE)"))
 @app.get('/health')
 def health(): return {'status':'ok','service':'kaystant-api'}
 def pw(v): return bcrypt.hashpw(v.encode(),bcrypt.gensalt()).decode()
