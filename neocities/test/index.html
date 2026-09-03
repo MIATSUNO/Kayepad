@@ -4,13 +4,13 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Kaystant — tinta para histórias</title>
-  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="style.css"><script>document.documentElement.dataset.hasToken=localStorage.getItem("kaystant_token")?"yes":"no";</script>
 </head>
 <body>
   <header class="topbar">
     <a class="brand" href="#inicio" aria-label="Kaystant início"><span class="brand-mark">K</span><span>kaystant</span></a>
     <nav><a href="#descobrir">Descobrir</a><a href="studio.html">Escrever</a><a href="studio.html#group">Grupos</a><a href="#loja">Loja</a></nav>
-    <div class="account-actions"><a class="profile-chip" id="open-profile" href="account.html"><span class="avatar" id="header-avatar">K</span><span id="header-label">Entrar ou criar conta</span><b id="header-coins" hidden>0 ◈</b></a><button class="logout-btn" id="logout" hidden>Sair</button></div>
+    <div class="account-actions"><a class="profile-chip" id="open-profile" href="account.html"><span class="avatar" id="header-avatar" hidden>K</span><span id="header-label">Entrar / Criar conta</span><b id="header-coins" hidden>0 ◈</b></a><button class="logout-btn" id="logout" hidden>Sair</button></div>
   </header>
 
   <main id="inicio">
@@ -18,6 +18,8 @@
       <div class="hero-copy"><p class="eyebrow">um lugar para deixar a tinta correr</p><h1>Histórias que<br><em>ficam na página.</em></h1><p>Leia, escreva e encontre pessoas que também transformam pensamentos em palavras. Aqui, cada interação vira tinta.</p><div class="hero-actions"><button class="btn primary" id="write-now">Publicar um artigo</button><a class="btn ghost" href="#descobrir">Explorar textos ↓</a></div></div>
       <div class="hero-art"><div class="ink-orb orb-a"></div><div class="ink-orb orb-b"></div><div class="ink-bottle large"><i></i><span>tinta</span></div><p>escreva<br>sem pedir licença</p></div>
     </section>
+
+    <section class="signup-bonus shell" id="signup-bonus" hidden><div><p class="eyebrow">bônus de boas-vindas</p><h2>Ao criar agora sua conta, você recebe automaticamente <strong>650 coins.</strong></h2><p>O bônus é creditado uma única vez no saldo real da sua conta no momento do cadastro.</p></div><a class="btn primary" href="account.html">Criar minha conta</a></section>
 
     <section class="stats shell"><div><strong>0</strong><span>textos publicados</span></div><div><strong>0</strong><span>autores ativos</span></div><div><strong>0</strong><span>tintas trocadas</span></div><div><strong>0</strong><span>grupos reunidos</span></div></section>
 
@@ -37,5 +39,5 @@
   <dialog id="write-modal"><form method="dialog" class="modal-card wide"><button class="close">×</button><p class="eyebrow">nova publicação</p><h2>Deixe a tinta correr</h2><label>Título<input id="new-title" placeholder="Um título que chama o leitor"></label><label>Tipo<select id="new-type"><option>Poesia</option><option>Artigo científico</option><option>Estudo/Pesquisa</option></select></label><label>Texto<textarea id="new-body" rows="7" placeholder="Comece sua história..."></textarea></label><div class="modal-actions"><button class="btn ghost" value="cancel">Cancelar</button><button class="btn primary" id="publish" value="publish">Publicar artigo</button></div></form></dialog>
   <dialog id="auth-modal"><form method="dialog" class="modal-card"><button class="close">×</button><p class="eyebrow">entrar no kaystant</p><h2>Volte para sua página.</h2><label>E-mail<input id="auth-email" type="email" required placeholder="voce@exemplo.com"></label><label>Senha<input id="auth-password" type="password" minlength="8" required placeholder="sua senha"></label><label id="confirm-wrap" hidden>Confirmar senha<input id="auth-confirm" type="password" minlength="8"></label><div class="modal-actions"><button class="btn ghost" value="cancel">Agora não</button><button class="btn primary" id="auth-submit" value="login">Entrar</button></div><p class="auth-note">Ainda não tem conta? <button type="button" id="signup-mode">Criar uma conta</button></p></form></dialog>
   <div class="toast" id="toast"></div>
-  <script src="config.js"></script><script src="app.js"></script><script src="fix.js"></script><script src="home-fix.js"></script><script src="reality.js"></script>
+  <script src="config.js"></script><script src="app.js"></script><script src="fix.js"></script><script src="home-fix.js"></script><script src="reality.js"></script><script src="auth-state.js"></script>
 </body></html>
