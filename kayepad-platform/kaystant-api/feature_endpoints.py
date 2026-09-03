@@ -1,4 +1,4 @@
-from app import SQLModel, DBField, UUID, uuid4, datetime, UTC, BaseModel, Field, app, Session, engine, select, KUser, KPost, KSession, KInk, KPurchase, KGroup, KGroupMember, KBook, KBookPost, post_json, user_json, me, Depends, HTTPException
+from app import SQLModel, DBField, UUID, uuid4, datetime, UTC, BaseModel, Field, app, Session, engine, select, KUser, KPost, KSession, KInk, KPurchase, KGroup, KGroupMember, KPet, KBook, KBookPost, KPetTouch, post_json, user_json, me, Depends, HTTPException
 
 # Social graph and editable profiles
 class KFollow(SQLModel, table=True):
@@ -17,6 +17,7 @@ class ProfileEdit(BaseModel):
  show_display_name:bool|None=None
  links:list[str]|None=Field(default=None,max_length=5)
  theme:str|None=None
+ avatar:dict|None=None
 
 @app.get('/users/{username}')
 def public_profile(username:str):
@@ -40,6 +41,7 @@ def edit_profile(d:ProfileEdit,u=Depends(me)):
    value=getattr(d,key)
    if value is not None: setattr(x,key,value)
   if d.links is not None: x.links_json=json.dumps(d.links[:5])
+  if d.avatar is not None: x.avatar_json=json.dumps(d.avatar)
   s.add(x);s.commit();s.refresh(x);return user_json(x)
 
 @app.post('/users/{username}/follow')
