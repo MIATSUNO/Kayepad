@@ -376,20 +376,36 @@ def patch_me(data: ProfilePatch,u=Depends(current_user)):
             if s.exec(select(User).where(User.pseudonym==updates["pseudonym"], User.id!=db.id)).first(): raise HTTPException(409,"Pseudônimo já cadastrado")
         for k,v in updates.items(): setattr(db,k,v)
         s.add(db); s.commit(); s.refresh(db); return public_user(db)
+def public_profile_json(s, user, viewer_id=None):
+    published=s.exec(select(Work).where(Work.user_id==user.id, Work.published==True).order_by(Work.created_at.desc())).all()
+    followers_count=len(s.exec(select(Follow).where(Follow.followed_id==user.id)).all())
+    following_count=len(s.exec(select(Follow).where(Follow.follower_id==user.id)).all())
+    return {"id":str(user.id),"pseudonym":user.pseudonym,"bio":user.bio,"badge":user.badge,"avatar_url":user.avatar_url,
+            "followers":followers_count,"following":following_count,
+            "is_following":bool(viewer_id and s.exec(select(Follow).where(Follow.follower_id==viewer_id,Follow.followed_id==user.id)).first()),
+            "works":[work_json(s,w) for w in published]}
+
 @app.get("/public/profiles/{pseudonym}")
-def public_profile(pseudonym: str):
-    """Return only the public profile projection and published works."""
+def public_profile(pseudonym: str, authorization: Optional[str] = Header(None)):
+    """Public profile projection, including published works and follow state when signed in."""
     with Session(engine) as s:
-        user=s.exec(select(User).where(User.pseudonym==pseudonym, User.banned==False)).first()
+        user=s.exec(select(User).where(User.pseudonym.ilike(pseudonym), User.banned==False)).first()
         if not user: raise HTTPException(404, "Perfil não encontrado")
-        published=s.exec(select(Work).where(Work.user_id==user.id, Work.published==True).order_by(Work.created_at.desc())).all()
-        return {
-            "pseudonym": user.pseudonym,
-            "bio": user.bio,
-            "badge": user.badge,
-            "avatar_url": user.avatar_url,
-            "works": [work_json(s,w) for w in published],
-        }
+        viewer_id=None
+        if authorization and authorization.startswith("Bearer "):
+            st=s.exec(select(SessionToken).where(SessionToken.token_hash==hashlib.sha256(authorization[7:].encode()).hexdigest(),SessionToken.revoked==False)).first()
+            if st: viewer_id=st.user_id
+        return public_profile_json(s,user,viewer_id)
+
+@app.get("/public/users/search")
+def public_search_users(q: str = Query("", min_length=2, max_length=40), limit: int = Query(20, ge=1, le=50)):
+    """Search visible authors without requiring a session; never returns email or private fields."""
+    term=q.strip()
+    if not term: return []
+    with Session(engine) as s:
+        rows=s.exec(select(User).where(User.pseudonym.ilike(f"%{term}%"), User.banned==False).order_by(User.pseudonym).limit(limit)).all()
+        return [{"id":str(x.id),"pseudonym":x.pseudonym,"bio":x.bio,"avatar_url":x.avatar_url,"badge":x.badge,
+                 "works_count":len(s.exec(select(Work).where(Work.user_id==x.id,Work.published==True)).all())} for x in rows]
 
 @app.get("/works")
 def works(limit:int=Query(20,ge=1,le=100),offset:int=Query(0,ge=0)):
@@ -660,8 +676,16 @@ def decide_invite(invite_id: UUID, decision: str, u=Depends(current_user)):
 @app.get("/rooms/invites")
 def room_invites(u=Depends(current_user)):
     with Session(engine) as s:
-        rows=s.exec(select(RoomInvite).where(RoomInvite.invitee_id==u.id, RoomInvite.status=="pending")).all()
-        return [{"id":str(i.id),"room_id":str(i.room_id),"room_title":(s.get(WritingRoom,i.room_id).title if s.get(WritingRoom,i.room_id) else "Sala"),"inviter_id":str(i.inviter_id),"created_at":i.created_at} for i in rows]
+        rows=s.exec(select(RoomInvite).where(RoomInvite.invitee_id==u.id, RoomInvite.status=="pending").order_by(RoomInvite.created_at.desc())).all()
+        return [{"id":str(i.id),"room_id":str(i.room_id),"room_title":(s.get(WritingRoom,i.room_id).title if s.get(WritingRoom,i.room_id) else "Sala"),"inviter_id":str(i.inviter_id),"inviter_pseudonym":(s.get(User,i.inviter_id).pseudonym if s.get(User,i.inviter_id) else "Pessoa Kayepad"),"created_at":i.created_at} for i in rows]
+
+@app.get("/rooms/{room_id}/invites")
+def room_outgoing_invites(room_id: UUID, u=Depends(current_user)):
+    with Session(engine) as s:
+        room=s.get(WritingRoom,room_id)
+        if not room or room.owner_id!=u.id: raise HTTPException(403,"Sem permissão")
+        rows=s.exec(select(RoomInvite).where(RoomInvite.room_id==room_id).order_by(RoomInvite.created_at.desc())).all()
+        return [{"id":str(i.id),"invitee_id":str(i.invitee_id),"invitee_pseudonym":(s.get(User,i.invitee_id).pseudonym if s.get(User,i.invitee_id) else "Pessoa Kayepad"),"status":i.status,"created_at":i.created_at} for i in rows]
 
 @app.get("/users/search")
 def search_users(q: str = Query("", min_length=2, max_length=40), u=Depends(current_user)):
