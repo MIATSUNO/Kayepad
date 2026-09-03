@@ -189,3 +189,4 @@ def highlights():
   now=datetime.now(UTC);return [book_json(s,b) for b in s.exec(select(KBook).where(KBook.featured_until>now).order_by(KBook.featured_until.desc())).all()]
 
 from feature_endpoints import *
+from account_endpoints import *
