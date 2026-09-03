@@ -67,13 +67,21 @@ def signup(d:Signup):
  if not re.fullmatch(r'[A-Za-z0-9_.-]{3,40}',d.username): raise HTTPException(422,'Nome de usuário inválido')
  with Session(engine) as s:
   if s.exec(select(KUser).where((KUser.email==d.email.lower())|(KUser.username==d.username))).first(): raise HTTPException(409,'E-mail ou nome de usuário já usado')
-  u=KUser(email=d.email.lower(),username=d.username,display_name=d.full_name,password_hash=pw(d.password)); s.add(u); s.commit(); s.refresh(u); return {'user':user_json(u),'token':issue(u)}
+  u=KUser(email=d.email.lower(),username=d.username,display_name=d.full_name,password_hash=pw(d.password),coins=650); s.add(u); s.commit(); s.refresh(u); return {'user':user_json(u),'token':issue(u)}
 @app.post('/auth/login')
 def login(d:Login):
  if not allowed_email(d.email): raise HTTPException(422,'Domínio de e-mail não permitido')
  with Session(engine) as s: u=s.exec(select(KUser).where(KUser.email==d.email.lower())).first()
  if not u or not bcrypt.checkpw(d.password.encode(),u.password_hash.encode()): raise HTTPException(401,'Credenciais inválidas')
  return {'user':user_json(u),'token':issue(u)}
+@app.post('/auth/logout')
+def logout(authorization: str|None=Header(None)):
+ if authorization and authorization.startswith('Bearer '):
+  h=hashlib.sha256(authorization[7:].encode()).hexdigest()
+  with Session(engine) as s:
+   ss=s.exec(select(KSession).where(KSession.token_hash==h)).first()
+   if ss: ss.revoked=True; s.add(ss); s.commit()
+ return {'ok':True}
 @app.get('/me')
 def get_me(u=Depends(me)): return user_json(u)
 @app.patch('/me')
