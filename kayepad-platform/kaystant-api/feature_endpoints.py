@@ -10,9 +10,14 @@ class KFollow(SQLModel, table=True):
 
 class ProfileEdit(BaseModel):
  username:str|None=Field(default=None,min_length=3,max_length=40)
- bio:str|None=Field(default=None,max_length=500)
+ bio:str|None=Field(default=None,max_length=280,pattern=r'^[^<>]*$')
  ink_color:str|None=Field(default=None,pattern=r'^#[0-9a-fA-F]{6}$')
  banner_url:str|None=Field(default=None,max_length=500)
+ display_name:str|None=Field(default=None,max_length=80)
+ show_display_name:bool|None=None
+ links:list[str]|None=Field(default=None,max_length=5)
+ theme:str|None=None
+ avatar:dict|None=None
 
 @app.get('/users/{username}')
 def public_profile(username:str):
@@ -32,9 +37,11 @@ def edit_profile(d:ProfileEdit,u=Depends(me)):
    taken=s.exec(select(KUser).where(KUser.username==d.username)).first()
    if taken: raise HTTPException(409,'Este nome de usuário já está em uso')
    x.username=d.username
-  for key in ('bio','ink_color','banner_url'):
+  for key in ('bio','ink_color','banner_url','display_name','show_display_name','theme'):
    value=getattr(d,key)
    if value is not None: setattr(x,key,value)
+  if d.links is not None: x.links_json=json.dumps(d.links[:5])
+  if d.avatar is not None: x.avatar_json=json.dumps(d.avatar)
   s.add(x);s.commit();s.refresh(x);return user_json(x)
 
 @app.post('/users/{username}/follow')
