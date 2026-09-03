@@ -28,7 +28,10 @@ class KInk(SQLModel,table=True):
 class KPurchase(SQLModel,table=True):
  __tablename__='kt_purchases'; id:UUID=DBField(default_factory=uuid4,primary_key=True); user_id:UUID=DBField(index=True); item:str; cost:int; created_at:datetime=DBField(default_factory=lambda:datetime.now(UTC))
 
-class Signup(BaseModel): email:str; username:str=Field(min_length=3,max_length=40); password:str=Field(min_length=8,max_length=128)
+class Signup(BaseModel): email:str; username:str=Field(min_length=3,max_length=40); password:str=Field(min_length=8,max_length=128); full_name:str=Field(default='',max_length=100)
+ALLOWED_EMAIL_DOMAINS={'gmail.com','googlemail.com','hotmail.com','outlook.com','kaystant.org'}
+def allowed_email(email):
+ return email.lower().rsplit('@',1)[-1] in ALLOWED_EMAIL_DOMAINS
 class Login(BaseModel): email:str; password:str
 class PostIn(BaseModel): title:str=Field(min_length=1,max_length=140); category:str; body:str=Field(min_length=1,max_length=30000)
 class ProfileIn(BaseModel): bio:str|None=None; ink_color:str|None=None; banner_url:str|None=None
@@ -55,11 +58,14 @@ def post_json(s,p):
  u=s.get(KUser,p.user_id); return {'id':str(p.id),'title':p.title,'category':p.category,'body':p.body,'ink_total':p.ink_total,'ink_goal':p.ink_goal,'fill':min(100,round(p.ink_total/p.ink_goal*100)),'coins_awarded':p.coins_awarded,'redeemed':bool(p.redeemed_at),'author':user_json(u),'created_at':p.created_at}
 @app.post('/auth/signup')
 def signup(d:Signup):
+ if not allowed_email(d.email): raise HTTPException(422,'Use Gmail, Hotmail, Outlook ou Kaystant Mail')
+ if not re.fullmatch(r'[A-Za-z0-9_.-]{3,40}',d.username): raise HTTPException(422,'Nome de usuário inválido')
  with Session(engine) as s:
   if s.exec(select(KUser).where((KUser.email==d.email.lower())|(KUser.username==d.username))).first(): raise HTTPException(409,'E-mail ou nome de usuário já usado')
-  u=KUser(email=d.email.lower(),username=d.username,password_hash=pw(d.password)); s.add(u); s.commit(); s.refresh(u); return {'user':user_json(u),'token':issue(u)}
+  u=KUser(email=d.email.lower(),username=d.username,display_name=d.full_name,password_hash=pw(d.password)); s.add(u); s.commit(); s.refresh(u); return {'user':user_json(u),'token':issue(u)}
 @app.post('/auth/login')
 def login(d:Login):
+ if not allowed_email(d.email): raise HTTPException(422,'Domínio de e-mail não permitido')
  with Session(engine) as s: u=s.exec(select(KUser).where(KUser.email==d.email.lower())).first()
  if not u or not bcrypt.checkpw(d.password.encode(),u.password_hash.encode()): raise HTTPException(401,'Credenciais inválidas')
  return {'user':user_json(u),'token':issue(u)}
