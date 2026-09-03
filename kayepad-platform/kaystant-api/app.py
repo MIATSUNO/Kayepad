@@ -5,6 +5,7 @@ from fastapi import FastAPI, Depends, HTTPException, Header, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from sqlmodel import SQLModel, Field as DBField, Session, create_engine, select
+from sqlalchemy import text
 import bcrypt
 
 UTC=timezone.utc
@@ -38,7 +39,11 @@ class ProfileIn(BaseModel): bio:str|None=None; ink_color:str|None=None; banner_u
 class InkIn(BaseModel): amount:int=Field(default=1,ge=1,le=10)
 
 @app.on_event('startup')
-def startup(): SQLModel.metadata.create_all(engine)
+def startup():
+ if not sqlite:
+  with engine.begin() as c:
+   c.execute(text("ALTER TABLE kt_users ADD COLUMN IF NOT EXISTS display_name TEXT DEFAULT ''")); c.execute(text("ALTER TABLE kt_users ADD COLUMN IF NOT EXISTS show_display_name BOOLEAN DEFAULT TRUE")); c.execute(text("ALTER TABLE kt_users ADD COLUMN IF NOT EXISTS links_json TEXT DEFAULT '[]'")); c.execute(text("ALTER TABLE kt_users ADD COLUMN IF NOT EXISTS theme TEXT DEFAULT 'paper'")); c.execute(text("ALTER TABLE kt_users ADD COLUMN IF NOT EXISTS avatar_json TEXT DEFAULT '{}'"))
+ SQLModel.metadata.create_all(engine)
 @app.get('/health')
 def health(): return {'status':'ok','service':'kaystant-api'}
 def pw(v): return bcrypt.hashpw(v.encode(),bcrypt.gensalt()).decode()
