@@ -1,4 +1,4 @@
-import os, secrets, hashlib, re
+import os, secrets, hashlib, re, json
 from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid4
 from fastapi import FastAPI, Depends, HTTPException, Header, Request
@@ -18,7 +18,7 @@ origins=[x.strip() for x in os.getenv('CORS_ORIGINS','https://kayepad.neocities.
 app.add_middleware(CORSMiddleware,allow_origins=origins,allow_methods=['GET','POST','PATCH','DELETE','OPTIONS'],allow_headers=['Authorization','Content-Type'])
 
 class KUser(SQLModel,table=True):
- __tablename__='kt_users'; id:UUID=DBField(default_factory=uuid4,primary_key=True); email:str=DBField(unique=True,index=True); username:str=DBField(unique=True,index=True); password_hash:str; bio:str=''; ink_color:str='#5367d8'; coins:int=0; ink:int=18; badge:str='normal'; banner_url:str=''; verified:bool=False; created_at:datetime=DBField(default_factory=lambda:datetime.now(UTC))
+ __tablename__='kt_users'; id:UUID=DBField(default_factory=uuid4,primary_key=True); email:str=DBField(unique=True,index=True); username:str=DBField(unique=True,index=True); password_hash:str; bio:str=''; ink_color:str='#5367d8'; coins:int=0; ink:int=18; badge:str='normal'; banner_url:str=''; display_name:str=''; show_display_name:bool=True; links_json:str='[]'; theme:str='paper'; avatar_json:str='{}'; verified:bool=False; created_at:datetime=DBField(default_factory=lambda:datetime.now(UTC))
 class KSession(SQLModel,table=True):
  __tablename__='kt_sessions'; id:UUID=DBField(default_factory=uuid4,primary_key=True); user_id:UUID=DBField(index=True); token_hash:str=DBField(unique=True,index=True); expires_at:datetime; revoked:bool=False
 class KPost(SQLModel,table=True):
@@ -50,7 +50,7 @@ def me(authorization: str|None=Header(None)):
   ss=s.exec(select(KSession).where(KSession.token_hash==h,KSession.revoked==False)).first(); u=s.get(KUser,ss.user_id) if ss else None
   if not ss or not u or ss.expires_at.replace(tzinfo=UTC)<datetime.now(UTC): raise HTTPException(401,'Sessão expirada')
   return u
-def user_json(u): return {'id':str(u.id),'username':u.username,'bio':u.bio,'ink_color':u.ink_color,'coins':u.coins,'ink':u.ink,'badge':u.badge,'banner_url':u.banner_url,'verified':u.verified}
+def user_json(u): return {'id':str(u.id),'username':u.username,'bio':u.bio,'ink_color':u.ink_color,'coins':u.coins,'ink':u.ink,'badge':u.badge,'banner_url':u.banner_url,'display_name':u.display_name,'show_display_name':u.show_display_name,'links':json.loads(u.links_json or '[]'),'theme':u.theme,'avatar':json.loads(u.avatar_json or '{}'),'verified':u.verified}
 def post_json(s,p):
  u=s.get(KUser,p.user_id); return {'id':str(p.id),'title':p.title,'category':p.category,'body':p.body,'ink_total':p.ink_total,'ink_goal':p.ink_goal,'fill':min(100,round(p.ink_total/p.ink_goal*100)),'coins_awarded':p.coins_awarded,'redeemed':bool(p.redeemed_at),'author':user_json(u),'created_at':p.created_at}
 @app.post('/auth/signup')
