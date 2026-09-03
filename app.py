@@ -602,7 +602,7 @@ def room_member(s, room_id, user_id, accepted=True):
     return s.exec(select(RoomParticipant).where(RoomParticipant.room_id==room_id, RoomParticipant.user_id==user_id, RoomParticipant.accepted==accepted)).first()
 def room_json(s, room):
     parts=s.exec(select(RoomParticipant).where(RoomParticipant.room_id==room.id, RoomParticipant.accepted==True)).all()
-    return {"id":str(room.id),"title":room.title,"owner_id":str(room.owner_id),"status":room.status,"participants":[{"user_id":str(p.user_id),"role":p.role} for p in parts],"created_at":room.created_at}
+    return {"id":str(room.id),"title":room.title,"owner_id":str(room.owner_id),"status":room.status,"participants":[{"user_id":str(p.user_id),"pseudonym":(s.get(User,p.user_id).pseudonym if s.get(User,p.user_id) else "Pessoa Kayepad"),"role":p.role} for p in parts],"created_at":room.created_at}
 @app.post("/rooms")
 def create_room(data: RoomIn, u=Depends(current_user)):
     with Session(engine) as s:
@@ -633,8 +633,26 @@ def decide_invite(invite_id: UUID, decision: str, u=Depends(current_user)):
         inv=s.get(RoomInvite,invite_id)
         if not inv or inv.invitee_id!=u.id or inv.status!="pending": raise HTTPException(404,"Convite não encontrado")
         inv.status="accepted" if decision=="accept" else "declined"; s.add(inv)
-        if decision=="accept": s.add(RoomParticipant(room_id=inv.room_id,user_id=u.id,role="editor",accepted=True))
+        if decision=="accept":
+            s.add(RoomParticipant(room_id=inv.room_id,user_id=u.id,role="editor",accepted=True))
+            room=s.get(WritingRoom,inv.room_id)
+            if room and room.owner_id != u.id:
+                s.add(Notification(recipient_id=room.owner_id,actor_id=u.id,kind="room_join",title="Convite aceito",body=f"{u.pseudonym} aceitou o convite para {room.title}.",url=f"/rooms/{room.id}"))
         s.commit(); return {"ok":True,"status":inv.status}
+@app.get("/rooms/invites")
+def room_invites(u=Depends(current_user)):
+    with Session(engine) as s:
+        rows=s.exec(select(RoomInvite).where(RoomInvite.invitee_id==u.id, RoomInvite.status=="pending")).all()
+        return [{"id":str(i.id),"room_id":str(i.room_id),"room_title":(s.get(WritingRoom,i.room_id).title if s.get(WritingRoom,i.room_id) else "Sala"),"inviter_id":str(i.inviter_id),"created_at":i.created_at} for i in rows]
+
+@app.get("/users/search")
+def search_users(q: str = Query("", min_length=2, max_length=40), u=Depends(current_user)):
+    term=q.strip().lower()
+    if not term: return []
+    with Session(engine) as s:
+        rows=s.exec(select(User).where(User.pseudonym.ilike(f"%{term}%"), User.banned==False).limit(20)).all()
+        return [{"id":str(x.id),"pseudonym":x.pseudonym} for x in rows if x.id != u.id]
+
 @app.get("/rooms")
 def list_rooms(u=Depends(current_user)):
     with Session(engine) as s:
