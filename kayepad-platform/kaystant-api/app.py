@@ -19,7 +19,7 @@ origins=[x.strip() for x in os.getenv('CORS_ORIGINS','https://kayepad.neocities.
 app.add_middleware(CORSMiddleware,allow_origins=origins,allow_methods=['GET','POST','PATCH','DELETE','OPTIONS'],allow_headers=['Authorization','Content-Type'])
 
 class KUser(SQLModel,table=True):
- __tablename__='kt_users'; id:UUID=DBField(default_factory=uuid4,primary_key=True); email:str=DBField(unique=True,index=True); username:str=DBField(unique=True,index=True); password_hash:str; bio:str=''; ink_color:str='#5367d8'; coins:int=0; ink:int=18; badge:str='normal'; banner_url:str=''; display_name:str=''; show_display_name:bool=True; links_json:str='[]'; theme:str='paper'; avatar_json:str='{}'; verified:bool=False; created_at:datetime=DBField(default_factory=lambda:datetime.now(UTC))
+ __tablename__='kt_users'; id:UUID=DBField(default_factory=uuid4,primary_key=True); email:str=DBField(unique=True,index=True); username:str=DBField(unique=True,index=True); password_hash:str; bio:str=''; ink_color:str='#5367d8'; coins:int=0; ink:int=18; badge:str='normal'; banner_url:str=''; display_name:str=''; show_display_name:bool=True; links_json:str='[]'; theme:str='paper'; verified:bool=False; created_at:datetime=DBField(default_factory=lambda:datetime.now(UTC))
 class KSession(SQLModel,table=True):
  __tablename__='kt_sessions'; id:UUID=DBField(default_factory=uuid4,primary_key=True); user_id:UUID=DBField(index=True); token_hash:str=DBField(unique=True,index=True); expires_at:datetime; revoked:bool=False
 class KPost(SQLModel,table=True):
@@ -42,7 +42,7 @@ class InkIn(BaseModel): amount:int=Field(default=1,ge=1,le=10)
 def startup():
  if not sqlite:
   with engine.begin() as c:
-   c.execute(text("ALTER TABLE kt_users ADD COLUMN IF NOT EXISTS display_name TEXT DEFAULT ''")); c.execute(text("ALTER TABLE kt_users ADD COLUMN IF NOT EXISTS show_display_name BOOLEAN DEFAULT TRUE")); c.execute(text("ALTER TABLE kt_users ADD COLUMN IF NOT EXISTS links_json TEXT DEFAULT '[]'")); c.execute(text("ALTER TABLE kt_users ADD COLUMN IF NOT EXISTS theme TEXT DEFAULT 'paper'")); c.execute(text("ALTER TABLE kt_users ADD COLUMN IF NOT EXISTS avatar_json TEXT DEFAULT '{}'"))
+   c.execute(text("ALTER TABLE kt_users ADD COLUMN IF NOT EXISTS display_name TEXT DEFAULT ''")); c.execute(text("ALTER TABLE kt_users ADD COLUMN IF NOT EXISTS show_display_name BOOLEAN DEFAULT TRUE")); c.execute(text("ALTER TABLE kt_users ADD COLUMN IF NOT EXISTS links_json TEXT DEFAULT '[]'")); c.execute(text("ALTER TABLE kt_users ADD COLUMN IF NOT EXISTS theme TEXT DEFAULT 'paper'"))
  SQLModel.metadata.create_all(engine)
 @app.get('/health')
 def health(): return {'status':'ok','service':'kaystant-api'}
@@ -58,7 +58,7 @@ def me(authorization: str|None=Header(None)):
   ss=s.exec(select(KSession).where(KSession.token_hash==h,KSession.revoked==False)).first(); u=s.get(KUser,ss.user_id) if ss else None
   if not ss or not u or ss.expires_at.replace(tzinfo=UTC)<datetime.now(UTC): raise HTTPException(401,'Sessão expirada')
   return u
-def user_json(u): return {'id':str(u.id),'username':u.username,'bio':u.bio,'ink_color':u.ink_color,'coins':u.coins,'ink':u.ink,'badge':u.badge,'banner_url':u.banner_url,'display_name':u.display_name,'show_display_name':u.show_display_name,'links':json.loads(u.links_json or '[]'),'theme':u.theme,'avatar':json.loads(u.avatar_json or '{}'),'verified':u.verified}
+def user_json(u): return {'id':str(u.id),'username':u.username,'bio':u.bio,'ink_color':u.ink_color,'coins':u.coins,'ink':u.ink,'badge':u.badge,'banner_url':u.banner_url,'display_name':u.display_name,'show_display_name':u.show_display_name,'links':json.loads(u.links_json or '[]'),'theme':u.theme,'verified':u.verified}
 def post_json(s,p):
  u=s.get(KUser,p.user_id); return {'id':str(p.id),'title':p.title,'category':p.category,'body':p.body,'ink_total':p.ink_total,'ink_goal':p.ink_goal,'fill':min(100,round(p.ink_total/p.ink_goal*100)),'coins_awarded':p.coins_awarded,'redeemed':bool(p.redeemed_at),'author':user_json(u),'created_at':p.created_at}
 @app.post('/auth/signup')
@@ -67,13 +67,21 @@ def signup(d:Signup):
  if not re.fullmatch(r'[A-Za-z0-9_.-]{3,40}',d.username): raise HTTPException(422,'Nome de usuário inválido')
  with Session(engine) as s:
   if s.exec(select(KUser).where((KUser.email==d.email.lower())|(KUser.username==d.username))).first(): raise HTTPException(409,'E-mail ou nome de usuário já usado')
-  u=KUser(email=d.email.lower(),username=d.username,display_name=d.full_name,password_hash=pw(d.password)); s.add(u); s.commit(); s.refresh(u); return {'user':user_json(u),'token':issue(u)}
+  u=KUser(email=d.email.lower(),username=d.username,display_name=d.full_name,password_hash=pw(d.password),coins=650); s.add(u); s.commit(); s.refresh(u); return {'user':user_json(u),'token':issue(u)}
 @app.post('/auth/login')
 def login(d:Login):
  if not allowed_email(d.email): raise HTTPException(422,'Domínio de e-mail não permitido')
  with Session(engine) as s: u=s.exec(select(KUser).where(KUser.email==d.email.lower())).first()
  if not u or not bcrypt.checkpw(d.password.encode(),u.password_hash.encode()): raise HTTPException(401,'Credenciais inválidas')
  return {'user':user_json(u),'token':issue(u)}
+@app.post('/auth/logout')
+def logout(authorization: str|None=Header(None)):
+ if authorization and authorization.startswith('Bearer '):
+  h=hashlib.sha256(authorization[7:].encode()).hexdigest()
+  with Session(engine) as s:
+   ss=s.exec(select(KSession).where(KSession.token_hash==h)).first()
+   if ss: ss.revoked=True; s.add(ss); s.commit()
+ return {'ok':True}
 @app.get('/me')
 def get_me(u=Depends(me)): return user_json(u)
 @app.patch('/me')
@@ -127,43 +135,16 @@ class KGroup(SQLModel, table=True):
  __tablename__='kt_groups'; id:UUID=DBField(default_factory=uuid4,primary_key=True); owner_id:UUID=DBField(index=True); name:str; hashtag:str=DBField(unique=True); rules:str=''; image_url:str=''; created_at:datetime=DBField(default_factory=lambda:datetime.now(UTC))
 class KGroupMember(SQLModel, table=True):
  __tablename__='kt_group_members'; group_id:UUID=DBField(primary_key=True); user_id:UUID=DBField(primary_key=True,index=True); joined_at:datetime=DBField(default_factory=lambda:datetime.now(UTC))
-class KPet(SQLModel, table=True):
- __tablename__='kt_pets'; id:UUID=DBField(default_factory=uuid4,primary_key=True); user_id:UUID=DBField(unique=True,index=True); name:str='Pingo'; color:str='#5367d8'; body_type:str='magrinho'; affection_count:int=0
 class KBook(SQLModel, table=True):
  __tablename__='kt_books'; id:UUID=DBField(default_factory=uuid4,primary_key=True); owner_id:UUID=DBField(index=True); title:str; description:str=''; cover_url:str=''; published:bool=True; featured_until:datetime|None=None; created_at:datetime=DBField(default_factory=lambda:datetime.now(UTC))
 class KBookPost(SQLModel, table=True):
  __tablename__='kt_book_posts'; book_id:UUID=DBField(primary_key=True); post_id:UUID=DBField(primary_key=True); position:int=0
-class KPetTouch(SQLModel, table=True):
- __tablename__='kt_pet_interactions'; id:UUID=DBField(default_factory=uuid4,primary_key=True); pet_id:UUID=DBField(index=True); visitor_id:UUID=DBField(index=True); kind:str='carinho'; created_at:datetime=DBField(default_factory=lambda:datetime.now(UTC))
 class GroupIn(BaseModel): name:str=Field(min_length=1,max_length=80); hashtag:str=Field(min_length=2,max_length=40); rules:str=Field(default='',max_length=2000); image_url:str=Field(default='',max_length=500)
-class PetIn(BaseModel): name:str=Field(min_length=1,max_length=30); color:str=Field(pattern=r'^#[0-9a-fA-F]{6}$'); body_type:str
-class BookIn(BaseModel): title:str=Field(min_length=1,max_length=140); description:str=Field(default='',max_length=2000); cover_url:str=Field(default='',max_length=500); post_ids:list[UUID]=Field(default_factory=list,max_length=100)
 def owns_item(s,user_id,item): return s.exec(select(KPurchase).where(KPurchase.user_id==user_id,KPurchase.item==item)).first() is not None
-def pet_json(s,p): return {'id':str(p.id),'user_id':str(p.user_id),'name':p.name,'color':p.color,'body_type':p.body_type,'affection_count':p.affection_count}
 def group_json(s,g):
  owner=s.get(KUser,g.owner_id); members=s.exec(select(KGroupMember).where(KGroupMember.group_id==g.id)).all(); return {'id':str(g.id),'name':g.name,'hashtag':g.hashtag,'rules':g.rules,'image_url':g.image_url,'owner':user_json(owner),'members':len(members),'max_members':10}
 def book_json(s,b):
  owner=s.get(KUser,b.owner_id); links=s.exec(select(KBookPost).where(KBookPost.book_id==b.id)).all(); return {'id':str(b.id),'title':b.title,'description':b.description,'cover_url':b.cover_url,'owner':user_json(owner),'post_ids':[str(x.post_id) for x in links],'featured_until':b.featured_until}
-@app.put('/me/pet')
-def save_pet(d:PetIn,u=Depends(me)):
- if d.body_type not in {'pequeno','alto','magrinho','gordinho'}: raise HTTPException(422,'Formato de pet inválido')
- with Session(engine) as s:
-  p=s.exec(select(KPet).where(KPet.user_id==u.id)).first()
-  if not p: p=KPet(user_id=u.id,name=d.name,color=d.color,body_type=d.body_type)
-  else: p.name,p.color,p.body_type=d.name,d.color,d.body_type
-  s.add(p);s.commit();s.refresh(p);return pet_json(s,p)
-@app.get('/users/{username}/pet')
-def get_pet(username:str):
- with Session(engine) as s:
-  u=s.exec(select(KUser).where(KUser.username==username)).first();
-  if not u: raise HTTPException(404,'Perfil não encontrado')
-  p=s.exec(select(KPet).where(KPet.user_id==u.id)).first(); return pet_json(s,p) if p else None
-@app.post('/pets/{pet_id}/affection')
-def affection(pet_id:UUID,u=Depends(me)):
- with Session(engine) as s:
-  p=s.get(KPet,pet_id)
-  if not p: raise HTTPException(404,'Pet não encontrado')
-  p.affection_count+=1;s.add(KPetTouch(pet_id=pet_id,visitor_id=u.id));s.commit();return {'ok':True,'pet':pet_json(s,p)}
 @app.post('/groups')
 def create_group(d:GroupIn,u=Depends(me)):
  with Session(engine) as s:
