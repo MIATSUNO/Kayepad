@@ -11,7 +11,7 @@ UTC=timezone.utc
 DATABASE_URL=os.getenv('DATABASE_URL','sqlite:///./kaystant.db')
 if DATABASE_URL.startswith('postgres://'): DATABASE_URL='postgresql+psycopg://'+DATABASE_URL[11:]
 elif DATABASE_URL.startswith('postgresql://'): DATABASE_URL='postgresql+psycopg://'+DATABASE_URL[13:]
-sqlite=DATABASE_URL.startswith('sqlite'); engine=create_engine(DATABASE_URL,pool_pre_ping=True,connect_args={'check_same_thread':False} if sqlite else {'prepare_threshold':0})
+sqlite=DATABASE_URL.startswith('sqlite'); engine=create_engine(DATABASE_URL,pool_pre_ping=True,connect_args={'check_same_thread':False} if sqlite else {'prepare_threshold':None})
 SECRET=os.getenv('JWT_SECRET','kaystant-dev-only-change-me')
 app=FastAPI(title='Kaystant API',version='0.1.0')
 origins=[x.strip() for x in os.getenv('CORS_ORIGINS','https://kayepad.neocities.org,http://localhost:3000').split(',') if x.strip()]
