@@ -224,8 +224,11 @@ def provision_official(s):
     official=s.exec(select(User).where(User.pseudonym=="KayepadOficial")).first()
     if not official:
         # No recoverable credential is stored or returned; this account is content-only.
-        official=User(email="official@kayepad.invalid", pseudonym="KayepadOficial", password_hash=hash_password(secrets.token_urlsafe(48)), badge="official_gold", email_verified=True)
+        official=User(email="official@kayepad.invalid", pseudonym="KayepadOficial", bio="Perfil oficial da Kayepad: novidades da plataforma, histórias da casa e caminhos para ler e escrever.", password_hash=hash_password(secrets.token_urlsafe(48)), badge="official_gold", email_verified=True)
         s.add(official); s.flush()
+    elif not official.bio:
+        official.bio="Perfil oficial da Kayepad: novidades da plataforma, histórias da casa e caminhos para ler e escrever."
+        s.add(official)
     return official
 def issue(u):
     raw = secrets.token_urlsafe(48); h = hashlib.sha256(raw.encode()).hexdigest()
@@ -373,6 +376,21 @@ def patch_me(data: ProfilePatch,u=Depends(current_user)):
             if s.exec(select(User).where(User.pseudonym==updates["pseudonym"], User.id!=db.id)).first(): raise HTTPException(409,"Pseudônimo já cadastrado")
         for k,v in updates.items(): setattr(db,k,v)
         s.add(db); s.commit(); s.refresh(db); return public_user(db)
+@app.get("/public/profiles/{pseudonym}")
+def public_profile(pseudonym: str):
+    """Return only the public profile projection and published works."""
+    with Session(engine) as s:
+        user=s.exec(select(User).where(User.pseudonym==pseudonym, User.banned==False)).first()
+        if not user: raise HTTPException(404, "Perfil não encontrado")
+        published=s.exec(select(Work).where(Work.user_id==user.id, Work.published==True).order_by(Work.created_at.desc())).all()
+        return {
+            "pseudonym": user.pseudonym,
+            "bio": user.bio,
+            "badge": user.badge,
+            "avatar_url": user.avatar_url,
+            "works": [work_json(s,w) for w in published],
+        }
+
 @app.get("/works")
 def works(limit:int=Query(20,ge=1,le=100),offset:int=Query(0,ge=0)):
     with Session(engine) as s: return [work_json(s,w) for w in s.exec(select(Work).where(Work.published).order_by(Work.created_at.desc()).offset(offset).limit(limit)).all()]
