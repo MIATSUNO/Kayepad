@@ -258,12 +258,12 @@ def clean_output(value):
 
 def chapter_json(c):
     return {"id": str(c.id), "work_id": str(c.work_id), "position": c.position,
-            "title": clean_output(c.title), "content": clean_output(c.content),
+            "title": c.title, "content": c.content,
             "published": c.published, "created_at": c.created_at}
 
 def work_json(s,w):
     a=s.get(User,w.user_id); votes=len(s.exec(select(Vote).where(Vote.work_id==w.id)).all())
-    return {"id":str(w.id),"title":clean_output(w.title),"excerpt":clean_output(w.excerpt),"cover_url":clean_output(w.cover_url),"chapters":w.chapters,"reads":w.reads,"votes":votes,"author":clean_output(a.pseudonym if a else ""), "badge":clean_output(a.badge if a else "normal")}
+    return {"id":str(w.id),"title":w.title,"excerpt":w.excerpt,"cover_url":w.cover_url,"chapters":w.chapters,"reads":w.reads,"votes":votes,"author":a.pseudonym if a else "", "badge":a.badge if a else "normal", "published":w.published}
 @app.on_event("startup")
 def startup():
     # Keep startup compatible with both a fresh SQLite database and an existing
@@ -418,7 +418,7 @@ def create_work(data: WorkIn, u=Depends(current_user)):
     with Session(engine) as s:
         initial_content=data.initial_chapter_content or data.initial_chapter
         initial_count=1 if initial_content else 0
-        w=Work(user_id=u.id, title=data.title.strip(), excerpt=data.excerpt.strip(), cover_url=data.cover_url.strip(), chapters=max(data.chapters, initial_count))
+        w=Work(user_id=u.id, title=data.title.strip(), excerpt=data.excerpt.strip(), cover_url=data.cover_url.strip(), chapters=initial_count)
         s.add(w); s.flush()
         if initial_content:
             s.add(Chapter(work_id=w.id, position=1, title=data.initial_chapter_title.strip(), content=initial_content.strip()))
@@ -439,7 +439,7 @@ def add_chapter(work_id: UUID, data: ChapterIn, u=Depends(current_user)):
             position=(last.position + 1) if last else 1
         if s.exec(select(Chapter).where(Chapter.work_id==work_id, Chapter.position==position)).first(): raise HTTPException(409, "Posição de capítulo já existe")
         c=Chapter(work_id=work_id, position=position, title=data.title.strip(), content=data.content.strip())
-        s.add(c); w.chapters=max(w.chapters,position); s.add(w); s.commit(); s.refresh(c)
+        s.add(c); s.flush(); w.chapters=len(s.exec(select(Chapter).where(Chapter.work_id==work_id)).all()); s.add(w); s.commit(); s.refresh(c)
         return chapter_json(c)
 @app.patch("/works/{work_id}")
 def update_work(work_id: UUID, data: WorkPatch, u=Depends(current_user)):
@@ -466,7 +466,7 @@ def delete_chapter(work_id: UUID, chapter_id: UUID, u=Depends(current_user)):
         w=s.get(Work, work_id); c=s.get(Chapter, chapter_id)
         if not w or not c or c.work_id != work_id: raise HTTPException(404,"Capítulo não encontrado")
         if w.user_id != u.id: raise HTTPException(403,"Somente o proprietário pode excluir o capítulo")
-        s.delete(c); remaining=s.exec(select(Chapter).where(Chapter.work_id==work_id,Chapter.id!=chapter_id)).all(); w.chapters=max([x.position for x in remaining],default=0); s.add(w); s.commit(); return {"ok":True,"deleted":True}
+        s.delete(c); s.flush(); remaining=s.exec(select(Chapter).where(Chapter.work_id==work_id)).all(); w.chapters=len(remaining); s.add(w); s.commit(); return {"ok":True,"deleted":True}
 @app.delete("/works/{work_id}")
 def delete_work(work_id: UUID, request: Request, u=Depends(current_user)):
     with Session(engine) as s:
@@ -625,7 +625,7 @@ def invite_room(room_id: UUID, data: InviteIn, u=Depends(current_user)):
         if s.exec(select(RoomParticipant).where(RoomParticipant.room_id==room_id,RoomParticipant.user_id==data.invitee_id)).first(): raise HTTPException(409,"Usuário já participa da sala")
         existing=s.exec(select(RoomInvite).where(RoomInvite.room_id==room_id,RoomInvite.invitee_id==data.invitee_id,RoomInvite.status=="pending")).first()
         if existing: return {"id":str(existing.id),"status":"pending"}
-        inv=RoomInvite(room_id=room_id,inviter_id=u.id,invitee_id=data.invitee_id); s.add(inv); s.commit(); return {"id":str(inv.id),"status":"pending"}
+        inv=RoomInvite(room_id=room_id,inviter_id=u.id,invitee_id=data.invitee_id); s.add(inv); s.add(Notification(recipient_id=data.invitee_id,actor_id=u.id,kind="room_invite",title="Convite para uma sala",body=f"{u.pseudonym} convidou você para a sala {room.title}.",url=f"/rooms/{room.id}")); s.commit(); return {"id":str(inv.id),"status":"pending"}
 @app.post("/rooms/invites/{invite_id}/{decision}")
 def decide_invite(invite_id: UUID, decision: str, u=Depends(current_user)):
     if decision not in {"accept","decline"}: raise HTTPException(400,"Decisão inválida")
