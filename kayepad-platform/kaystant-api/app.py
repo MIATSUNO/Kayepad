@@ -190,3 +190,4 @@ def highlights():
 
 from feature_endpoints import *
 from account_endpoints import *
+from auth_endpoints import *
