@@ -1,0 +1,22 @@
+const posts=[
+ {user:'lua_de_papel',initial:'L',title:'A cidade depois da chuva',type:'Poesia',body:'Há lugares que só aparecem quando o barulho termina. Escrevi este para quem aprendeu a escutar o intervalo.',color:'#e97768',fill:72,tints:38},
+ {user:'caderno.do.mar',initial:'C',title:'Sobre insistir nas primeiras tentativas',type:'Estudo/Pesquisa',body:'Uma pequena pesquisa sobre o que acontece quando deixamos de tratar o rascunho como fracasso.',color:'#5367d8',fill:49,tints:24},
+ {user:'raiz_e_ensaio',initial:'R',title:'O que a leitura devolve',type:'Artigo científico',body:'Notas sobre memória, formação de repertório e os mundos que se abrem quando lemos devagar.',color:'#79a86d',fill:88,tints:57},
+ {user:'nuvemrascunho',initial:'N',title:'Manual para dias sem palavras',type:'Poesia',body:'Não escrever também pode ser uma forma de preparar a página.',color:'#a7639b',fill:34,tints:12}
+];
+const $=s=>document.querySelector(s); const $$=s=>[...document.querySelectorAll(s)];
+function render(list=posts){$('#post-list').innerHTML=list.map((p,i)=>`<article class="post"><div class="post-avatar">${p.initial}</div><div><div class="post-meta">@${p.user} · ${p.type}</div><h3>${p.title}</h3><p>${p.body}</p><div class="post-meta">${p.tints} tintas recebidas · há ${i+1} h</div></div><div><div class="ink-meter" style="--post-color:${p.color};--fill:${p.fill}%"><i></i></div><span class="ink-label">${p.fill}%</span></div></article>`).join('')}
+render();
+const API=window.KAYSTANT_API||'';
+if(API){fetch(API+'/feed').then(r=>r.ok?r.json():[]).then(items=>{if(Array.isArray(items)&&items.length){posts.splice(0,posts.length,...items.map(x=>({user:x.author?.username||'autor',initial:(x.author?.username||'A')[0].toUpperCase(),title:x.title,type:x.category==='poesia'?'Poesia':x.category==='artigo_cientifico'?'Artigo científico':'Estudo/Pesquisa',body:x.body,color:x.author?.ink_color||'#5367d8',fill:x.fill||0,tints:x.ink_total||0,id:x.id})));render()}}).catch(()=>{});}
+function toast(msg){const t=$('#toast');t.textContent=msg;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2600)}
+function open(d){d.showModal()}; $('#write-now').onclick=()=>open($('#write-modal')); $('#open-profile').onclick=()=>{if(API)open($('#auth-modal'));else open($('#profile-modal'))}; $('#open-profile2').onclick=()=>open($('#profile-modal')); $('#pet-edit').onclick=()=>toast('Em breve: nome, cor e formato do seu pet.');
+$('#auth-submit').onclick=async()=>{if(!API)return;const email=$('#auth-email').value,password=$('#auth-password').value;try{const r=await fetch(API+'/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email,password})});if(!r.ok)throw Error();const data=await r.json();localStorage.setItem('kaystant_token',data.token);toast('Bem-vindo de volta ✦')}catch(e){toast('Não conseguimos entrar agora — confira seus dados.')}};
+$('#signup-mode').onclick=()=>{toast('Cadastro seguro em breve nesta tela ✦')};
+$('.pet-stage').onclick=()=>{const p=$('.pet');p.animate([{transform:'translateY(0) rotate(0)'},{transform:'translateY(-34px) rotate(12deg)'},{transform:'translateY(0) rotate(-4deg)'}],{duration:650});toast('Pingo recebeu carinho ✦')};
+$$('.group-cards button').forEach(b=>b.onclick=()=>toast('A página do grupo está chegando — a Régua abre esse caminho.'));
+$$('.dot').forEach(b=>b.onclick=()=>{const c=b.dataset.color;document.documentElement.style.setProperty('--ink',c);$$('.dot').forEach(x=>x.classList.remove('active'));b.classList.add('active');toast('Sua tinta mudou de cor ✦')});
+$$('.palette button').forEach(b=>b.onclick=()=>{document.documentElement.style.setProperty('--ink',b.dataset.color);toast('Cor salva no seu perfil ✦')});
+$$('.buy').forEach(b=>b.onclick=()=>{const cost=+b.dataset.cost;toast(cost>680?'Você ainda precisa de mais tinta para essa troca.':'Item desbloqueado — seu perfil acaba de ganhar uma possibilidade nova ✦')});
+$('#filter').onchange=e=>{let v=e.target.value;render(v==='Poesias'?posts.filter(p=>p.type==='Poesia'):v==='Estudos e pesquisas'?posts.filter(p=>p.type!=='Poesia'):posts)};
+$('#publish').onclick=()=>{const title=$('#new-title').value.trim();if(title)toast('Artigo publicado e já pode receber tinta ✦');else toast('Dê um título para sua publicação primeiro.')};
