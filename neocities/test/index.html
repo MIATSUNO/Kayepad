@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Kaystant — tinta para histórias</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="#inicio" aria-label="Kaystant início"><span class="brand-mark">K</span><span>kaystant</span></a>
+    <nav><a href="#descobrir">Descobrir</a><a href="studio.html">Escrever</a><a href="studio.html#group">Grupos</a><a href="#loja">Loja</a></nav>
+    <div class="account-actions"><a class="profile-chip" id="open-profile" href="account.html"><span class="avatar" id="header-avatar">K</span><span id="header-label">Entrar ou criar conta</span><b id="header-coins" hidden>0 ◈</b></a><button class="logout-btn" id="logout" hidden>Sair</button></div>
+  </header>
+
+  <main id="inicio">
+    <section class="hero shell">
+      <div class="hero-copy"><p class="eyebrow">um lugar para deixar a tinta correr</p><h1>Histórias que<br><em>ficam na página.</em></h1><p>Leia, escreva e encontre pessoas que também transformam pensamentos em palavras. Aqui, cada interação vira tinta.</p><div class="hero-actions"><button class="btn primary" id="write-now">Publicar um artigo</button><a class="btn ghost" href="#descobrir">Explorar textos ↓</a></div></div>
+      <div class="hero-art"><div class="ink-orb orb-a"></div><div class="ink-orb orb-b"></div><div class="ink-bottle large"><i></i><span>tinta</span></div><p>escreva<br>sem pedir licença</p></div>
+    </section>
+
+    <section class="stats shell"><div><strong>1.248</strong><span>textos publicados</span></div><div><strong>326</strong><span>autores ativos</span></div><div><strong>8.940</strong><span>tintas trocadas</span></div><div><strong>42</strong><span>grupos reunidos</span></div></section>
+
+    <section class="content-grid shell" id="descobrir">
+      <div class="feed"><div class="section-heading"><div><p class="eyebrow">do papel da comunidade</p><h2>Descobrir textos</h2></div><select id="filter"><option>Mais recentes</option><option>Mais tintas</option><option>Poesias</option><option>Estudos e pesquisas</option></select></div><div id="post-list"></div></div>
+      <aside class="side-column"><div class="panel ink-panel"><div class="panel-title"><span>Sua tinta</span><button id="open-profile2">Editar</button></div><div class="ink-summary"><div class="bottle"><i id="my-ink-fill"></i></div><div><strong id="my-ink-count">18</strong><span>tintas disponíveis</span><small>Cor: <b id="my-color-label">azul índigo</b></small></div></div><div class="color-dots"><button class="dot indigo active" data-color="#5367d8"></button><button class="dot coral" data-color="#e97768"></button><button class="dot moss" data-color="#79a86d"></button><button class="dot gold" data-color="#e4aa4d"></button><button class="dot plum" data-color="#a7639b"></button></div></div><div class="panel"><div class="panel-title"><span>Ranking da semana</span><a href="#">ver tudo</a></div><ol class="ranking"><li><span class="rank-avatar a1">L</span><div><b>Lua de papel</b><small>1.284 tintas</small></div><strong>01</strong></li><li><span class="rank-avatar a2">C</span><div><b>caderno.do.mar</b><small>1.016 tintas</small></div><strong>02</strong></li><li><span class="rank-avatar a3">R</span><div><b>Rascunho aberto</b><small>882 tintas</small></div><strong>03</strong></li></ol></div></aside>
+    </section>
+
+    <section class="shop shell" id="loja"><div class="section-heading"><div><p class="eyebrow">troque seu esforço por possibilidades</p><h2>Loja de desbloqueios</h2></div><div class="wallet">Sua carteira <b id="shop-coins">680 ◈</b></div></div><div class="shop-grid"><article class="shop-item"><div class="item-icon pen">✎</div><h3>Caneta</h3><p>Publique um livro, receba destaque por 3 dias, selo de verificação, banner e criação de grupo.</p><button class="btn buy" data-cost="2900">2.900 ◈</button></article><article class="shop-item"><div class="item-icon ruler">▥</div><h3>Régua</h3><p>Crie seu mini-clube com até 10 pessoas, regras, imagem e hashtag própria.</p><button class="btn buy" data-cost="1000">1.000 ◈</button></article><article class="shop-item featured"><span class="tag">mais desejado</span><div class="item-icon seal">✦</div><h3>Selo</h3><p>Ative um selo colorido no perfil e desbloqueie banner PNG ou GIF personalizado.</p><button class="btn buy" data-cost="1200">1.200 ◈</button></article></div></section>
+
+    <section class="groups shell" id="grupos"><div><p class="eyebrow">comunidades pequenas, conversas grandes</p><h2>Grupos que estão criando</h2></div><div class="group-cards"><article><span class="group-symbol">✺</span><b>#leiamulheres</b><small>8 / 10 membros</small><button>Conhecer →</button></article><article><span class="group-symbol green">⌁</span><b>#poesiadodia</b><small>6 / 10 membros</small><button>Conhecer →</button></article><article><span class="group-symbol orange">◌</span><b>#estudosempressa</b><small>4 / 10 membros</small><button>Conhecer →</button></article></div></section>
+  </main>
+
+  <footer><span class="brand"><span class="brand-mark">K</span> kaystant</span><span>poesias · artigos científicos · estudos e pesquisas</span><span>feito para quem escreve ✍</span></footer>
+
+  <dialog id="profile-modal"><form method="dialog" class="modal-card"><button class="close">×</button><p class="eyebrow">seu perfil</p><h2>Personalizar tinta</h2><label>Nome de usuário<input id="profile-username" value="morveyn" readonly></label><label>Cor da sua tinta<div class="palette"><button type="button" data-color="#5367d8"></button><button type="button" data-color="#e97768"></button><button type="button" data-color="#79a86d"></button><button type="button" data-color="#e4aa4d"></button><button type="button" data-color="#a7639b"></button></div></label><input id="profile-color" type="hidden" value="#5367d8"><label>Bio<textarea id="profile-bio">escrevendo entre mundos e páginas.</textarea></label><button class="btn primary" id="profile-save" value="save">Salvar perfil</button></form></dialog>
+  <dialog id="write-modal"><form method="dialog" class="modal-card wide"><button class="close">×</button><p class="eyebrow">nova publicação</p><h2>Deixe a tinta correr</h2><label>Título<input id="new-title" placeholder="Um título que chama o leitor"></label><label>Tipo<select id="new-type"><option>Poesia</option><option>Artigo científico</option><option>Estudo/Pesquisa</option></select></label><label>Texto<textarea id="new-body" rows="7" placeholder="Comece sua história..."></textarea></label><div class="modal-actions"><button class="btn ghost" value="cancel">Cancelar</button><button class="btn primary" id="publish" value="publish">Publicar artigo</button></div></form></dialog>
+  <dialog id="auth-modal"><form method="dialog" class="modal-card"><button class="close">×</button><p class="eyebrow">entrar no kaystant</p><h2>Volte para sua página.</h2><label>E-mail<input id="auth-email" type="email" required placeholder="voce@exemplo.com"></label><label>Senha<input id="auth-password" type="password" minlength="8" required placeholder="sua senha"></label><label id="confirm-wrap" hidden>Confirmar senha<input id="auth-confirm" type="password" minlength="8"></label><div class="modal-actions"><button class="btn ghost" value="cancel">Agora não</button><button class="btn primary" id="auth-submit" value="login">Entrar</button></div><p class="auth-note">Ainda não tem conta? <button type="button" id="signup-mode">Criar uma conta</button></p></form></dialog>
+  <div class="toast" id="toast"></div>
+  <script src="config.js"></script><script src="app.js"></script><script src="fix.js"></script><script src="home-fix.js"></script><script src="reality.js"></script>
+</body></html>
