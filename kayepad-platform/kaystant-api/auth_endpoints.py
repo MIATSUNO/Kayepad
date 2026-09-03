@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field
 from app import app, Session, engine, select, KUser, pw
 class RecoverIn(BaseModel): email:str=Field(pattern=r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
 class KaystantRecoverIn(BaseModel): full_name:str=Field(min_length=1,max_length=100); email:str=Field(pattern=r'^[^@\s]+@kaystant\.org$'); username:str=Field(min_length=3,max_length=40)
-class ResetIn(BaseModel): token:str=min_length(32); password:str=Field(min_length=8,max_length=128)
+class ResetIn(BaseModel): token:str=Field(min_length=32); password:str=Field(min_length=8,max_length=128)
 @app.post('/auth/recover')
 def recover(d:RecoverIn):
  base=os.getenv('SUPABASE_URL','').rstrip('/'); key=os.getenv('SUPABASE_ANON_KEY','')
