@@ -163,6 +163,21 @@ class WorkIn(BaseModel):
     @field_validator("cover_url")
     @classmethod
     def cover_policy(cls, v): return safe_public_url(v)
+class WorkPatch(BaseModel):
+    title: Optional[str] = PField(None, min_length=1, max_length=140)
+    excerpt: Optional[str] = PField(None, max_length=3000)
+    cover_url: Optional[str] = PField(None, max_length=500)
+    published: Optional[bool] = None
+    _safe = field_validator("title", "excerpt")(lambda v: reject_malicious(v) if v is not None else v)
+    @field_validator("cover_url")
+    @classmethod
+    def patch_cover_policy(cls, v): return safe_public_url(v) if v is not None else v
+class ChapterPatch(BaseModel):
+    title: Optional[str] = PField(None, max_length=140)
+    content: Optional[str] = PField(None, min_length=1, max_length=100000)
+    position: Optional[int] = PField(None, ge=1, le=10000)
+    published: Optional[bool] = None
+    _safe = field_validator("title", "content")(lambda v: reject_malicious(v) if v is not None else v)
 class ProfilePatch(BaseModel):
     pseudonym: Optional[str] = PField(None, min_length=3, max_length=40, pattern=r"^[A-Za-z0-9_\.\-]+$")
     bio: Optional[str] = PField(None, max_length=1000); avatar_url: Optional[str] = PField(None, max_length=500); theme: Optional[str] = None; kaye_enabled: Optional[bool] = None
@@ -361,6 +376,11 @@ def patch_me(data: ProfilePatch,u=Depends(current_user)):
 @app.get("/works")
 def works(limit:int=Query(20,ge=1,le=100),offset:int=Query(0,ge=0)):
     with Session(engine) as s: return [work_json(s,w) for w in s.exec(select(Work).where(Work.published).order_by(Work.created_at.desc()).offset(offset).limit(limit)).all()]
+@app.get("/me/works")
+def my_works(u=Depends(current_user)):
+    with Session(engine) as s:
+        return [work_json(s,w) for w in s.exec(select(Work).where(Work.user_id==u.id).order_by(Work.created_at.desc())).all()]
+
 @app.get("/works/{work_id}")
 def work_detail(work_id: UUID, authorization: Optional[str] = Header(None)):
     with Session(engine) as s:
@@ -421,6 +441,32 @@ def add_chapter(work_id: UUID, data: ChapterIn, u=Depends(current_user)):
         c=Chapter(work_id=work_id, position=position, title=data.title.strip(), content=data.content.strip())
         s.add(c); w.chapters=max(w.chapters,position); s.add(w); s.commit(); s.refresh(c)
         return chapter_json(c)
+@app.patch("/works/{work_id}")
+def update_work(work_id: UUID, data: WorkPatch, u=Depends(current_user)):
+    with Session(engine) as s:
+        w=s.get(Work, work_id)
+        if not w: raise HTTPException(404,"Obra não encontrada")
+        if w.user_id != u.id: raise HTTPException(403,"Somente o proprietário pode editar a obra")
+        for k,v in data.model_dump(exclude_none=True).items(): setattr(w,k,v)
+        s.add(w); s.commit(); s.refresh(w); return work_json(s,w)
+
+@app.patch("/works/{work_id}/chapters/{chapter_id}")
+def update_chapter(work_id: UUID, chapter_id: UUID, data: ChapterPatch, u=Depends(current_user)):
+    with Session(engine) as s:
+        w=s.get(Work, work_id); c=s.get(Chapter, chapter_id)
+        if not w or not c or c.work_id != work_id: raise HTTPException(404,"Capítulo não encontrado")
+        if w.user_id != u.id: raise HTTPException(403,"Somente o proprietário pode editar o capítulo")
+        updates=data.model_dump(exclude_none=True)
+        if "position" in updates and s.exec(select(Chapter).where(Chapter.work_id==work_id,Chapter.position==updates["position"],Chapter.id!=chapter_id)).first(): raise HTTPException(409,"Posição de capítulo já existe")
+        for k,v in updates.items(): setattr(c,k,v)
+        s.add(c); s.commit(); s.refresh(c); return chapter_json(c)
+@app.delete("/works/{work_id}/chapters/{chapter_id}")
+def delete_chapter(work_id: UUID, chapter_id: UUID, u=Depends(current_user)):
+    with Session(engine) as s:
+        w=s.get(Work, work_id); c=s.get(Chapter, chapter_id)
+        if not w or not c or c.work_id != work_id: raise HTTPException(404,"Capítulo não encontrado")
+        if w.user_id != u.id: raise HTTPException(403,"Somente o proprietário pode excluir o capítulo")
+        s.delete(c); remaining=s.exec(select(Chapter).where(Chapter.work_id==work_id,Chapter.id!=chapter_id)).all(); w.chapters=max([x.position for x in remaining],default=0); s.add(w); s.commit(); return {"ok":True,"deleted":True}
 @app.delete("/works/{work_id}")
 def delete_work(work_id: UUID, request: Request, u=Depends(current_user)):
     with Session(engine) as s:
