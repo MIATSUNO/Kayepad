@@ -5,5 +5,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY app.py .
 COPY feature_endpoints.py .
 COPY account_endpoints.py .
+COPY auth_endpoints.py .
 EXPOSE 8000
 CMD ["uvicorn","app:app","--host","0.0.0.0","--port","8000"]
