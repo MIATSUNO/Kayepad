@@ -1,8 +1,8 @@
 import os, httpx
 from fastapi import HTTPException
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, Field
 from app import app
-class RecoverIn(BaseModel): email:EmailStr
+class RecoverIn(BaseModel): email:str=Field(pattern=r'^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$')
 @app.post('/auth/recover')
 def recover(d:RecoverIn):
  base=os.getenv('SUPABASE_URL','').rstrip('/')
