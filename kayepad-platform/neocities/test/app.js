@@ -26,4 +26,4 @@ $('#publish')?.addEventListener('click',async e=>{e.preventDefault();if(!token()
 $('#filter')?.addEventListener('change',e=>{const v=e.target.value;render(v==='Poesias'?posts.filter(p=>p.type==='Poesia'):v==='Estudos e pesquisas'?posts.filter(p=>p.type!=='Poesia'):posts)});
 $('.pet-stage')?.addEventListener('click',()=>{const p=$('.pet');p.animate([{transform:'translateY(0)'},{transform:'translateY(-34px) rotate(12deg)'},{transform:'translateY(0)'}],{duration:650});toast('Pingo recebeu carinho ✦')});
 $$('.buy').forEach(b=>b.onclick=()=>toast('A compra será ligada à carteira na próxima atualização ✦'));
-render();loadFeed();
+render();setTimeout(()=>{if($('#post-list')&&!$('#post-list').children.length)render(posts)},120);loadFeed();
