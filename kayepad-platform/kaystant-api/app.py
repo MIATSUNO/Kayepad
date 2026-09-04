@@ -106,6 +106,7 @@ def add_ink(post_id:UUID,d:InkIn,u=Depends(me)):
   p=s.get(KPost,post_id)
   if not p: raise HTTPException(404,'Publicação não encontrada')
   if p.user_id==u.id: raise HTTPException(400,'A própria publicação não recebe sua tinta')
+  if p.ink_total>=p.ink_goal: raise HTTPException(409,'O frasco já está cheio')
   existing=s.exec(select(KInk).where(KInk.post_id==post_id,KInk.user_id==u.id)).first()
   if existing: raise HTTPException(409,'Você já deixou tinta nesta publicação')
   x=s.get(KUser,u.id)
@@ -118,7 +119,7 @@ def redeem(post_id:UUID,u=Depends(me)):
   if not p or p.user_id!=u.id: raise HTTPException(404,'Publicação não encontrada')
   if p.ink_total<p.ink_goal: raise HTTPException(400,'O frasco ainda não encheu')
   if p.redeemed_at: raise HTTPException(409,'Coins já resgatados nesta publicação')
-  amount=secrets.randbelow(16);p.coins_awarded=amount;p.redeemed_at=datetime.now(UTC);x=s.get(KUser,u.id);x.coins+=amount;s.commit();return {'coins':amount,'user':user_json(x)}
+  amount=25;p.coins_awarded=amount;p.redeemed_at=datetime.now(UTC);x=s.get(KUser,u.id);x.coins+=amount;s.commit();return {'coins':amount,'user':user_json(x)}
 @app.post('/shop/{item}')
 def shop(item:str,u=Depends(me)):
  costs={'selo':1200,'regua':1000,'caneta':2900}
