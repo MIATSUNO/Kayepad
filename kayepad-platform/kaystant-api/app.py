@@ -118,8 +118,7 @@ def redeem(post_id:UUID,u=Depends(me)):
   p=s.get(KPost,post_id)
   if not p or p.user_id!=u.id: raise HTTPException(404,'Publicação não encontrada')
   if p.ink_total<p.ink_goal: raise HTTPException(400,'O frasco ainda não encheu')
-  if p.redeemed_at: raise HTTPException(409,'Coins já resgatados nesta publicação')
-  amount=25;p.coins_awarded=amount;p.redeemed_at=datetime.now(UTC);x=s.get(KUser,u.id);x.coins+=amount;s.commit();return {'coins':amount,'user':user_json(x)}
+  amount=25;p.ink_total-=p.ink_goal;p.coins_awarded=amount;p.redeemed_at=datetime.now(UTC);x=s.get(KUser,u.id);x.coins+=amount;s.commit();return {'coins':amount,'remaining_ink':p.ink_total,'ink_goal':p.ink_goal,'post':post_json(s,p),'user':user_json(x)}
 @app.post('/shop/{item}')
 def shop(item:str,u=Depends(me)):
  costs={'selo':1200,'regua':1000,'caneta':2900}
