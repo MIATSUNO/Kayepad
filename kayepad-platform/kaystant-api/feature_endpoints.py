@@ -1,3 +1,4 @@
+import json
 from app import SQLModel, DBField, UUID, uuid4, datetime, UTC, BaseModel, Field, app, Session, engine, select, KUser, KPost, KSession, KInk, KPurchase, KGroup, KGroupMember, KPet, KBook, KBookPost, KPetTouch, post_json, user_json, me, Depends, HTTPException
 
 # Social graph and editable profiles
@@ -17,6 +18,7 @@ class ProfileEdit(BaseModel):
  show_display_name:bool|None=None
  links:list[str]|None=Field(default=None,max_length=5)
  theme:str|None=None
+ instagram_handle:str|None=Field(default=None,max_length=40,pattern=r'^$|^@?[A-Za-z0-9_.]{1,39}$')
  avatar:dict|None=None
 
 @app.get('/users/{username}')
@@ -34,10 +36,12 @@ def edit_profile(d:ProfileEdit,u=Depends(me)):
  with Session(engine) as s:
   x=s.get(KUser,u.id)
   if d.username is not None and d.username!=x.username:
+   if x.username_changed_at and x.username_changed_at.replace(tzinfo=UTC)+__import__('datetime').timedelta(days=7)>datetime.now(UTC): raise HTTPException(429,'Você só poderá alterar o nome de usuário novamente após 7 dias')
+   if x.coins<50: raise HTTPException(402,'São necessários 50 coins para alterar o nome de usuário')
    taken=s.exec(select(KUser).where(KUser.username==d.username)).first()
    if taken: raise HTTPException(409,'Este nome de usuário já está em uso')
-   x.username=d.username
-  for key in ('bio','ink_color','banner_url','display_name','show_display_name','theme'):
+   x.username=d.username; x.coins-=50; x.username_changed_at=datetime.now(UTC)
+  for key in ('bio','ink_color','banner_url','display_name','show_display_name','theme','instagram_handle'):
    value=getattr(d,key)
    if value is not None: setattr(x,key,value)
   if d.links is not None: x.links_json=json.dumps(d.links[:5])
