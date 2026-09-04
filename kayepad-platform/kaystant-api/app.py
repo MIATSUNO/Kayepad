@@ -23,7 +23,7 @@ class KUser(SQLModel,table=True):
 class KSession(SQLModel,table=True):
  __tablename__='kt_sessions'; id:UUID=DBField(default_factory=uuid4,primary_key=True); user_id:UUID=DBField(index=True); token_hash:str=DBField(unique=True,index=True); expires_at:datetime; revoked:bool=False
 class KPost(SQLModel,table=True):
- __tablename__='kt_posts'; id:UUID=DBField(default_factory=uuid4,primary_key=True); user_id:UUID=DBField(index=True); title:str; category:str; body:str; ink_total:int=0; ink_goal:int=100; coins_awarded:int|None=None; redeemed_at:datetime|None=None; created_at:datetime=DBField(default_factory=lambda:datetime.now(UTC))
+ __tablename__='kt_posts'; id:UUID=DBField(default_factory=uuid4,primary_key=True); user_id:UUID=DBField(index=True); title:str; category:str; body:str; ink_total:int=0; ink_goal:int=100; coins_awarded:int|None=None; redeemed_at:datetime|None=None; created_at:datetime=DBField(default_factory=lambda:datetime.now(UTC)); full_name:str=''; article_date:str=''; article_location:str=''; data_used:str=''; rights:str=''; sources:str=''
 class KInk(SQLModel,table=True):
  __tablename__='kt_inks'; id:UUID=DBField(default_factory=uuid4,primary_key=True); post_id:UUID=DBField(index=True); user_id:UUID=DBField(index=True); amount:int=1; color:str; created_at:datetime=DBField(default_factory=lambda:datetime.now(UTC))
 class KPurchase(SQLModel,table=True):
@@ -34,7 +34,7 @@ ALLOWED_EMAIL_DOMAINS={'gmail.com','googlemail.com','hotmail.com','outlook.com',
 def allowed_email(email):
  return email.lower().rsplit('@',1)[-1] in ALLOWED_EMAIL_DOMAINS
 class Login(BaseModel): email:str; password:str
-class PostIn(BaseModel): title:str=Field(min_length=1,max_length=140); category:str; body:str=Field(min_length=1,max_length=30000)
+class PostIn(BaseModel): title:str=Field(min_length=1,max_length=140); category:str; body:str=Field(min_length=1,max_length=30000); full_name:str=Field(default='',max_length=120); article_date:str=Field(default='',max_length=30); article_location:str=Field(default='',max_length=160); data_used:str=Field(default='',max_length=1000); rights:str=Field(default='',max_length=80); sources:str=Field(default='',max_length=3000)
 class ProfileIn(BaseModel): bio:str|None=None; ink_color:str|None=None; banner_url:str|None=None
 class InkIn(BaseModel): amount:int=Field(default=1,ge=1,le=10)
 
@@ -42,7 +42,7 @@ class InkIn(BaseModel): amount:int=Field(default=1,ge=1,le=10)
 def startup():
  if not sqlite:
   with engine.begin() as c:
-   c.execute(text("ALTER TABLE kt_users ADD COLUMN IF NOT EXISTS display_name TEXT DEFAULT ''")); c.execute(text("ALTER TABLE kt_users ADD COLUMN IF NOT EXISTS show_display_name BOOLEAN DEFAULT TRUE")); c.execute(text("ALTER TABLE kt_users ADD COLUMN IF NOT EXISTS links_json TEXT DEFAULT '[]'")); c.execute(text("ALTER TABLE kt_users ADD COLUMN IF NOT EXISTS theme TEXT DEFAULT 'paper'")); c.execute(text("ALTER TABLE kt_users ADD COLUMN IF NOT EXISTS avatar_json TEXT DEFAULT '{}'"))
+   c.execute(text("ALTER TABLE kt_users ADD COLUMN IF NOT EXISTS display_name TEXT DEFAULT ''")); c.execute(text("ALTER TABLE kt_users ADD COLUMN IF NOT EXISTS show_display_name BOOLEAN DEFAULT TRUE")); c.execute(text("ALTER TABLE kt_users ADD COLUMN IF NOT EXISTS links_json TEXT DEFAULT '[]'")); c.execute(text("ALTER TABLE kt_users ADD COLUMN IF NOT EXISTS theme TEXT DEFAULT 'paper'")); c.execute(text("ALTER TABLE kt_posts ADD COLUMN IF NOT EXISTS full_name TEXT DEFAULT ''")); c.execute(text("ALTER TABLE kt_posts ADD COLUMN IF NOT EXISTS article_date TEXT DEFAULT ''")); c.execute(text("ALTER TABLE kt_posts ADD COLUMN IF NOT EXISTS article_location TEXT DEFAULT ''")); c.execute(text("ALTER TABLE kt_posts ADD COLUMN IF NOT EXISTS data_used TEXT DEFAULT ''")); c.execute(text("ALTER TABLE kt_posts ADD COLUMN IF NOT EXISTS rights TEXT DEFAULT ''")); c.execute(text("ALTER TABLE kt_posts ADD COLUMN IF NOT EXISTS sources TEXT DEFAULT ''")); c.execute(text("ALTER TABLE kt_users ADD COLUMN IF NOT EXISTS avatar_json TEXT DEFAULT '{}'"))
  SQLModel.metadata.create_all(engine)
  with engine.begin() as c: c.execute(text("CREATE TABLE IF NOT EXISTS kt_password_resets (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, token_hash TEXT UNIQUE NOT NULL, expires_at TIMESTAMP NOT NULL, used BOOLEAN NOT NULL DEFAULT FALSE)"))
 @app.get('/health')
@@ -61,7 +61,7 @@ def me(authorization: str|None=Header(None)):
   return u
 def user_json(u): return {'id':str(u.id),'username':u.username,'bio':u.bio,'ink_color':u.ink_color,'coins':u.coins,'ink':u.ink,'badge':u.badge,'banner_url':u.banner_url,'display_name':u.display_name,'show_display_name':u.show_display_name,'links':json.loads(u.links_json or '[]'),'theme':u.theme,'avatar':json.loads(u.avatar_json or '{}'),'verified':u.verified}
 def post_json(s,p):
- u=s.get(KUser,p.user_id); return {'id':str(p.id),'title':p.title,'category':p.category,'body':p.body,'ink_total':p.ink_total,'ink_goal':p.ink_goal,'fill':min(100,round(p.ink_total/p.ink_goal*100)),'coins_awarded':p.coins_awarded,'redeemed':bool(p.redeemed_at),'author':user_json(u),'created_at':p.created_at}
+ u=s.get(KUser,p.user_id); return {'id':str(p.id),'title':p.title,'category':p.category,'body':p.body,'ink_total':p.ink_total,'ink_goal':p.ink_goal,'fill':min(100,round(p.ink_total/p.ink_goal*100)),'coins_awarded':p.coins_awarded,'redeemed':bool(p.redeemed_at),'author':user_json(u),'created_at':p.created_at,'full_name':p.full_name,'article_date':p.article_date,'article_location':p.article_location,'data_used':p.data_used,'rights':p.rights,'sources':p.sources}
 @app.post('/auth/signup')
 def signup(d:Signup):
  if not allowed_email(d.email): raise HTTPException(422,'Use Gmail, Hotmail, Outlook ou Kaystant Mail')
@@ -99,7 +99,7 @@ def feed(limit:int=30):
 @app.post('/posts')
 def create_post(d:PostIn,u=Depends(me)):
  if d.category not in {'poesia','artigo_cientifico','estudo_pesquisa'}: raise HTTPException(422,'Categoria não permitida')
- with Session(engine) as s: p=KPost(user_id=u.id,title=d.title,category=d.category,body=d.body);s.add(p);s.commit();s.refresh(p);return post_json(s,p)
+ with Session(engine) as s: p=KPost(user_id=u.id,title=d.title,category=d.category,body=d.body,full_name=d.full_name,article_date=d.article_date,article_location=d.article_location,data_used=d.data_used,rights=d.rights,sources=d.sources);s.add(p);s.commit();s.refresh(p);return post_json(s,p)
 @app.post('/posts/{post_id}/ink')
 def add_ink(post_id:UUID,d:InkIn,u=Depends(me)):
  with Session(engine) as s:
