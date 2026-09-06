@@ -50,6 +50,12 @@ def edit_profile(d:ProfileEdit,u=Depends(me)):
   if d.avatar is not None: x.avatar_json=json.dumps(d.avatar)
   s.add(x);s.commit();s.refresh(x);return user_json(x)
 
+@app.get('/users/{username}/follow-status')
+def follow_status(username:str,u=Depends(me)):
+ with Session(engine) as s:
+  target=s.exec(select(KUser).where(KUser.username==username)).first()
+  if not target: raise HTTPException(404,'Perfil não encontrado')
+  return {'following':bool(s.exec(select(KFollow).where(KFollow.follower_id==u.id,KFollow.followed_id==target.id)).first())}
 @app.post('/users/{username}/follow')
 def follow(username:str,u=Depends(me)):
  with Session(engine) as s:
