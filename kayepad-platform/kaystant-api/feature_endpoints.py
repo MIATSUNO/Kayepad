@@ -103,8 +103,6 @@ def update_ticket(s,p,user,amount):
 def ke_wallet(s,u):
  _expire(s,u.id);s.commit(); now=datetime.now(UTC)
  seal=s.get(KSealState,u.id); now=datetime.now(UTC)
- if not seal and owns_item(s,u.id,'selo'):
-  seal=KSealState(user_id=u.id,active=True,expires_at=now+timedelta(days=30));s.add(seal);s.commit()
  if seal and seal.expires_at.replace(tzinfo=UTC)<=now: seal.active=False; s.add(seal); s.commit()
  w=s.get(KSpecialWallet,u.id); inv=s.get(KTicketInventory,u.id)
  legacy=s.exec(select(KPurchase).where(KPurchase.user_id==u.id,KPurchase.item=='ticket')).all()
@@ -123,11 +121,14 @@ def ke_buy(item:str,u=Depends(me)):
  with Session(engine) as s:
   x=s.get(KUser,u.id); prices={'selo':2800,'ticket':600}
   if item not in prices: raise HTTPException(400,'Use a carteira de Coins Especiais para este artigo')
-  if item=='selo' and owns_item(s,x.id,'selo'): raise HTTPException(409,'Você já possui o Selo')
+  seal=s.get(KSealState,x.id)
+  if item=='selo' and seal and seal.active and seal.expires_at.replace(tzinfo=UTC)>datetime.now(UTC):
+   # compra de renovação: mantém o benefício atual e acrescenta 30 dias
+   pass
   if x.coins<prices[item]: raise HTTPException(400,'Coins insuficientes')
   x.coins-=prices[item]
   if item=='selo':
-   x.badge='selo';x.verified=True;s.add(KPurchase(user_id=x.id,item='selo',cost=prices[item]));s.add(KSealState(user_id=x.id,active=True,expires_at=datetime.now(UTC)+timedelta(days=30)))
+   x.badge='selo';x.verified=True;s.add(KPurchase(user_id=x.id,item='selo',cost=prices[item]));base=seal.expires_at if seal and seal.active and seal.expires_at.replace(tzinfo=UTC)>datetime.now(UTC) else datetime.now(UTC);seal=seal or KSealState(user_id=x.id,active=True,expires_at=base+timedelta(days=30));seal.active=True;seal.expires_at=base+timedelta(days=30);s.add(seal)
   else:
    inv=s.get(KTicketInventory,x.id) or KTicketInventory(user_id=x.id,quantity=0);inv.quantity+=1;s.add(inv)
   s.add(x);s.commit();return ke_wallet(s,x)
