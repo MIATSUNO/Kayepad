@@ -136,6 +136,9 @@ def ke_buy(item:str,u=Depends(me)):
 def use_ticket(d:TicketUseIn,u=Depends(me)):
  with Session(engine) as s:
   inv=s.get(KTicketInventory,u.id);p=s.get(KPost,d.post_id)
+  if not inv:
+   legacy=s.exec(select(KPurchase).where(KPurchase.user_id==u.id,KPurchase.item=='ticket')).all()
+   if legacy: inv=KTicketInventory(user_id=u.id,quantity=len(legacy));s.add(inv);s.flush()
   if not inv or inv.quantity<1: raise HTTPException(400,'Você não tem Tickets disponíveis')
   if not p or p.user_id!=u.id: raise HTTPException(403,'Escolha uma publicação sua')
   if s.exec(select(KTicket).where(KTicket.post_id==p.id,KTicket.status=='ativo')).first(): raise HTTPException(409,'Esta publicação já tem um Ticket ativo')
