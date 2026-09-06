@@ -185,3 +185,10 @@ def edit_seal(d:SealProfileIn,u=Depends(me)):
  with Session(engine) as s:
   if not active_seal(s,u.id): raise HTTPException(403,'Compre o Selo para desbloquear esta personalização')
   p=s.get(KSealProfile,u.id) or KSealProfile(user_id=u.id);p.gif_url=d.gif_url;p.music_url=d.music_url;p.border_style=d.border_style;s.add(p);s.commit();return {'active':True,'gif_url':p.gif_url,'music_url':p.music_url,'border_style':p.border_style}
+
+@app.post('/ink-shop/buy')
+def buy_ink(u=Depends(me)):
+ with Session(engine) as s:
+  x=s.get(KUser,u.id)
+  if x.coins<100: raise HTTPException(400,'São necessários 100 Coins para comprar 50 Tintas')
+  x.coins-=100;x.ink+=50;s.add(x);s.commit();return {'coins':x.coins,'ink':x.ink,'purchased':50}
