@@ -151,7 +151,7 @@ def shop(item:str,u=Depends(me)):
  if item not in costs: raise HTTPException(404,'Item não encontrado')
  with Session(engine) as s:
   x=s.get(KUser,u.id)
-  if owns_item(s,x.id,item): raise HTTPException(409,'Você já possui este recurso')
+  if s.exec(select(KPurchase).where(KPurchase.user_id==x.id,KPurchase.item==item)).first(): raise HTTPException(409,'Você já possui este recurso')
   if x.coins<costs[item]: raise HTTPException(400,'Coins insuficientes')
   x.coins-=costs[item];s.add(KPurchase(user_id=x.id,item=item,cost=costs[item]))
   if item=='selo': x.badge='selo'
