@@ -68,7 +68,10 @@ def me(authorization: str|None=Header(None)):
  return u
 def user_json(u): return {'id':str(u.id),'username':u.username,'bio':u.bio,'ink_color':u.ink_color,'coins':u.coins,'ink':u.ink,'badge':u.badge,'banner_url':u.banner_url,'display_name':u.display_name,'show_display_name':u.show_display_name,'links':json.loads(u.links_json or '[]'),'theme':u.theme,'avatar':json.loads(u.avatar_json or '{}'),'instagram_handle':u.instagram_handle,'verified':u.verified}
 def post_json(s,p):
- u=s.get(KUser,p.user_id); return {'id':str(p.id),'title':p.title,'category':p.category,'body':p.body,'ink_total':p.ink_total,'ink_goal':p.ink_goal,'fill':min(100,round(p.ink_total/p.ink_goal*100)),'coins_awarded':p.coins_awarded,'redeemed':bool(p.redeemed_at),'author':user_json(u),'created_at':p.created_at,'full_name':p.full_name,'article_date':p.article_date,'article_location':p.article_location,'data_used':p.data_used,'rights':p.rights,'sources':p.sources}
+ u=s.get(KUser,p.user_id); active=None
+ if 'KTicket' in globals():
+  active=s.exec(select(KTicket).where(KTicket.post_id==p.id,KTicket.status=='ativo')).first()
+ return {'id':str(p.id),'title':p.title,'category':p.category,'body':p.body,'ink_total':p.ink_total,'ink_goal':p.ink_goal,'fill':min(100,round(p.ink_total/p.ink_goal*100)),'coins_awarded':p.coins_awarded,'redeemed':bool(p.redeemed_at),'author':user_json(u),'created_at':p.created_at,'full_name':p.full_name,'article_date':p.article_date,'article_location':p.article_location,'data_used':p.data_used,'rights':p.rights,'sources':p.sources,'ticket':({'meta':active.meta,'progress':active.progress,'status':active.status,'expires_at':active.expires_at} if active else None)}
 @app.post('/auth/signup')
 def signup(d:Signup):
  if not allowed_email(d.email): raise HTTPException(422,'Use Gmail, Hotmail, Outlook ou Kaystant Mail')
@@ -132,7 +135,9 @@ def add_ink(post_id:UUID,d:InkIn,u=Depends(me)):
   p=s.get(KPost,post_id)
   if not p: raise HTTPException(404,'Publicação não encontrada')
   if p.user_id==u.id: raise HTTPException(400,'A própria publicação não recebe sua tinta')
-  if p.ink_total>=p.ink_goal: raise HTTPException(409,'O frasco já está cheio')
+  active_ticket=s.exec(select(KTicket).where(KTicket.post_id==post_id,KTicket.status=='ativo')).first() if 'KTicket' in globals() else None
+  if p.ink_total>=p.ink_goal and not active_ticket: raise HTTPException(409,'O frasco já está cheio')
+  if active_ticket and p.ink_total-active_ticket.start_ink>=active_ticket.meta: raise HTTPException(409,'A meta do Ticket já foi atingida')
   existing=s.exec(select(KInk).where(KInk.post_id==post_id,KInk.user_id==u.id)).first()
   if existing: raise HTTPException(409,'Você já deixou tinta nesta publicação')
   x=s.get(KUser,u.id)
