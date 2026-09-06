@@ -85,6 +85,10 @@ def logout(authorization: str|None=Header(None)):
  return {'ok':True}
 @app.get('/me')
 def get_me(u=Depends(me)): return user_json(u)
+@app.get('/me/unlocks')
+def get_unlocks(u=Depends(me)):
+ with Session(engine) as s:
+  return {'coins':u.coins,'items':{item:bool(s.exec(select(KPurchase).where(KPurchase.user_id==u.id,KPurchase.item==item)).first()) for item in ('caneta','regua','selo')}}
 @app.patch('/me')
 def patch_me(d:ProfileIn,u=Depends(me)):
  with Session(engine) as s:
