@@ -142,7 +142,10 @@ def use_ticket(d:TicketUseIn,u=Depends(me)):
   if not inv or inv.quantity<1: raise HTTPException(400,'Você não tem Tickets disponíveis')
   if not p or p.user_id!=u.id: raise HTTPException(403,'Escolha uma publicação sua')
   if s.exec(select(KTicket).where(KTicket.post_id==p.id,KTicket.status=='ativo')).first(): raise HTTPException(409,'Esta publicação já tem um Ticket ativo')
-  inv.quantity-=1;t=KTicket(user_id=u.id,post_id=p.id,meta=d.meta,start_ink=p.ink_total,expires_at=datetime.now(UTC)+timedelta(hours=1));s.add(inv);s.add(t);s.commit();return _ticket_json(t)
+  inv.quantity-=1;t=KTicket(user_id=u.id,post_id=p.id,meta=d.meta,start_ink=p.ink_total,expires_at=datetime.now(UTC)+timedelta(hours=1));s.add(inv);s.add(t)
+  try: s.commit()
+  except Exception as e: s.rollback(); raise HTTPException(500,'Ticket não pôde ser ativado: '+str(e)[:240])
+  return _ticket_json(t)
 @app.post('/special/buy')
 def special_buy(d:SpecialBuyIn,u=Depends(me)):
  prices={'magica':5,'autor':10,'marcador':3,'broche':8,'vela':5,'exlibris':10};days={'magica':7,'autor':30,'marcador':1,'broche':30,'vela':7,'exlibris':14}
