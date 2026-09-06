@@ -101,6 +101,9 @@ def update_ticket(s,p,user,amount):
 def ke_wallet(s,u):
  _expire(s,u.id);s.commit(); now=datetime.now(UTC)
  w=s.get(KSpecialWallet,u.id); inv=s.get(KTicketInventory,u.id)
+ legacy=s.exec(select(KPurchase).where(KPurchase.user_id==u.id,KPurchase.item=='ticket')).all()
+ if legacy and (not inv or inv.quantity<len(legacy)):
+  inv=inv or KTicketInventory(user_id=u.id,quantity=0); inv.quantity=max(inv.quantity,len(legacy)); s.add(inv); s.commit()
  return {'coins':u.coins,'special_coins':w.balance if w else 0,'seal':owns_item(s,u.id,'selo'),'tickets':inv.quantity if inv else 0,'tickets_active':[_ticket_json(t) for t in s.exec(select(KTicket).where(KTicket.user_id==u.id,KTicket.status=='ativo')).all()],'effects':[_effect_json(e) for e in s.exec(select(KEffect).where(KEffect.user_id==u.id,KEffect.expires_at>now)).all()]}
 
 @app.get('/ke-store/catalog')
