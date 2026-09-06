@@ -110,7 +110,7 @@ def rankings(category:str='active',limit:int=10):
   users=s.exec(select(KUser)).all(); rows=[]
   for u in users:
    if category=='active':
-    acts=s.exec(select(KActivity).where(KActivity.user_id==u.id)).all(); metric=len({x.day for x in acts}); latest=max((x.last_seen for x in acts),default=None); label=f'{metric} dias ativos'
+    acts=s.exec(select(KActivity).where(KActivity.user_id==u.id)).all(); metric=len({x.day for x in acts}); latest=max((x.last_seen for x in acts),default=None); label=f'{metric} dia ativo' if metric==1 else f'{metric} dias ativos'
    elif category=='authors':
     metric=len(s.exec(select(KPost).where(KPost.user_id==u.id)).all()); latest=None; label=f'{metric} publicações'
    elif category=='ink':
