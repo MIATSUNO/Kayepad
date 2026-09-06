@@ -114,7 +114,7 @@ def ke_wallet(s,u):
 
 @app.get('/ke-store/catalog')
 def ke_catalog():
- return {'normal':[{'id':'selo','name':'Selo','price':2800,'permanent':True},{'id':'ticket','name':'Ticket','price':5,'permanent':False}],'special':[{'id':'magica','name':'Tinta Mágica','price':5,'days':7},{'id':'autor','name':'Etiqueta de Autor','price':10,'days':30},{'id':'marcador','name':'Marcador de Página','price':3,'days':1},{'id':'broche','name':'Broche Kayepad','price':8,'days':30},{'id':'vela','name':'Vela Nota','price':5,'days':7},{'id':'exlibris','name':'Ex-Libris','price':10,'days':14}]}
+ return {'normal':[{'id':'selo','name':'Selo','price':2800,'permanent':True},{'id':'ticket','name':'Ticket','price':600,'permanent':False}],'special':[{'id':'magica','name':'Tinta Mágica','price':5,'days':7},{'id':'autor','name':'Etiqueta de Autor','price':10,'days':30},{'id':'marcador','name':'Marcador de Página','price':3,'days':1},{'id':'broche','name':'Broche Kayepad','price':8,'days':30},{'id':'vela','name':'Vela Nota','price':5,'days':7},{'id':'exlibris','name':'Ex-Libris','price':10,'days':14}]}
 @app.get('/me/ke-wallet')
 def ke_wallet_me(u=Depends(me)):
  with Session(engine) as s:return ke_wallet(s,s.get(KUser,u.id))
