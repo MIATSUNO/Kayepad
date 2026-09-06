@@ -55,3 +55,4 @@ html[data-has-token="yes"] #header-label{visibility:hidden}html[data-auth="logge
 /* Perfil: o botão de editar só existe visualmente para o dono */
 body:not(.owner-view) #edit{display:none!important}#follow{display:inline-block!important}#follow[hidden]{display:none!important}
 .seal-music{position:absolute;right:24px;top:24px;width:min(260px,70%);height:30px}.seal-status{display:inline-block;padding:6px 10px;border-radius:999px;background:#fff4d7}.seal-controls{border:1px solid #ead9ad;padding:14px;border-radius:12px;background:#fffaf0}
+.ink-buy{width:100%;margin-top:18px;font-size:12px}.ink-buy:hover{border-color:var(--ink);color:var(--ink)}.ink-buy:disabled{opacity:.6;cursor:wait}
