@@ -29,7 +29,9 @@ def public_profile(username:str):
   followers=len(s.exec(select(KFollow).where(KFollow.followed_id==u.id)).all())
   following=len(s.exec(select(KFollow).where(KFollow.follower_id==u.id)).all())
   posts=[post_json(s,p) for p in s.exec(select(KPost).where(KPost.user_id==u.id).order_by(KPost.created_at.desc())).all()]
-  return {'profile':user_json(u),'followers':followers,'following':following,'posts':posts}
+  st=active_seal(s,u.id) if 'active_seal' in globals() else None; sp=s.get(KSealProfile,u.id) if 'KSealProfile' in globals() else None
+  profile=user_json(u);profile.update({'selo_ativo':bool(st),'selo_expira_em':st.expires_at if st else None,'seal':{'gif_url':sp.gif_url if sp else '','music_url':sp.music_url if sp else '','border_style':sp.border_style if sp else 'holografica'}})
+  return {'profile':profile,'followers':followers,'following':following,'posts':posts}
 
 @app.patch('/profile')
 def edit_profile(d:ProfileEdit,u=Depends(me)):
@@ -155,3 +157,25 @@ def special_buy(d:SpecialBuyIn,u=Depends(me)):
   if not w or w.balance<prices[d.kind]: raise HTTPException(400,'Coins Especiais insuficientes')
   if d.kind in {'autor','marcador','vela'} and (not d.post_id or not (p:=s.get(KPost,d.post_id)) or p.user_id!=u.id): raise HTTPException(403,'Escolha uma publicação sua')
   w.balance-=prices[d.kind];e=KEffect(user_id=u.id,kind=d.kind,post_id=d.post_id,value=d.value,expires_at=datetime.now(UTC)+timedelta(days=days[d.kind]));s.add(w);s.add(e);s.commit();return _effect_json(e)
+
+class KSealProfile(SQLModel, table=True):
+ __tablename__='kt_seal_profiles'; user_id:UUID=DBField(primary_key=True); gif_url:str=''; music_url:str=''; border_style:str='holografica'
+class SealProfileIn(BaseModel): gif_url:str=Field(default='',max_length=500); music_url:str=Field(default='',max_length=500); border_style:str=Field(default='holografica',max_length=30)
+def active_seal(s,user_id):
+ x=s.get(KSealState,user_id); now=datetime.now(UTC)
+ if not x or not x.active or x.expires_at.replace(tzinfo=UTC)<=now:
+  if x and x.active: x.active=False;s.add(x);s.commit()
+  return None
+ return x
+@app.get('/users/{username}/seal')
+def public_seal(username:str):
+ with Session(engine) as s:
+  u=s.exec(select(KUser).where(KUser.username==username)).first()
+  if not u: raise HTTPException(404,'Perfil não encontrado')
+  seal=active_seal(s,u.id); p=s.get(KSealProfile,u.id)
+  return {'active':bool(seal),'expires_at':seal.expires_at if seal else None,'gif_url':p.gif_url if p else '','music_url':p.music_url if p else '','border_style':p.border_style if p else 'holografica'}
+@app.patch('/me/seal')
+def edit_seal(d:SealProfileIn,u=Depends(me)):
+ with Session(engine) as s:
+  if not active_seal(s,u.id): raise HTTPException(403,'Compre o Selo para desbloquear esta personalização')
+  p=s.get(KSealProfile,u.id) or KSealProfile(user_id=u.id);p.gif_url=d.gif_url;p.music_url=d.music_url;p.border_style=d.border_style;s.add(p);s.commit();return {'active':True,'gif_url':p.gif_url,'music_url':p.music_url,'border_style':p.border_style}
