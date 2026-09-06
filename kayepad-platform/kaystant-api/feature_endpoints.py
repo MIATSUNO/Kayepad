@@ -69,6 +69,8 @@ def following(username:str):
   return [user_json(s.get(KUser,x.followed_id)) for x in ids]
 
 # --- Ke-Store v2: permanent seal, tickets and temporary special articles ---
+class KSealState(SQLModel, table=True):
+ __tablename__='kt_seal_states'; user_id:UUID=DBField(primary_key=True); active:bool=True; expires_at:datetime
 class KSpecialWallet(SQLModel, table=True):
  __tablename__='kt_special_wallets'; user_id:UUID=DBField(primary_key=True); balance:int=0
 class KTicketInventory(SQLModel, table=True):
@@ -100,27 +102,32 @@ def update_ticket(s,p,user,amount):
 
 def ke_wallet(s,u):
  _expire(s,u.id);s.commit(); now=datetime.now(UTC)
+ seal=s.get(KSealState,u.id); now=datetime.now(UTC)
+ if not seal and owns_item(s,u.id,'selo'):
+  seal=KSealState(user_id=u.id,active=True,expires_at=now+timedelta(days=30));s.add(seal);s.commit()
+ if seal and seal.expires_at.replace(tzinfo=UTC)<=now: seal.active=False; s.add(seal); s.commit()
  w=s.get(KSpecialWallet,u.id); inv=s.get(KTicketInventory,u.id)
  legacy=s.exec(select(KPurchase).where(KPurchase.user_id==u.id,KPurchase.item=='ticket')).all()
  if legacy and (not inv or inv.quantity<len(legacy)):
   inv=inv or KTicketInventory(user_id=u.id,quantity=0); inv.quantity=max(inv.quantity,len(legacy)); s.add(inv); s.commit()
- return {'coins':u.coins,'special_coins':w.balance if w else 0,'seal':owns_item(s,u.id,'selo'),'tickets':inv.quantity if inv else 0,'tickets_active':[_ticket_json(t) for t in s.exec(select(KTicket).where(KTicket.user_id==u.id,KTicket.status=='ativo')).all()],'effects':[_effect_json(e) for e in s.exec(select(KEffect).where(KEffect.user_id==u.id,KEffect.expires_at>now)).all()]}
+ return {'coins':u.coins,'special_coins':w.balance if w else 0,'seal':bool(seal and seal.active),'selo_ativo':bool(seal and seal.active),'selo_expira_em':seal.expires_at if seal and seal.active else None,'tickets':inv.quantity if inv else 0,'tickets_active':[_ticket_json(t) for t in s.exec(select(KTicket).where(KTicket.user_id==u.id,KTicket.status=='ativo')).all()],'effects':[_effect_json(e) for e in s.exec(select(KEffect).where(KEffect.user_id==u.id,KEffect.expires_at>now)).all()]}
 
 @app.get('/ke-store/catalog')
 def ke_catalog():
- return {'normal':[{'id':'selo','name':'Selo','price':50,'permanent':True},{'id':'ticket','name':'Ticket','price':5,'permanent':False}],'special':[{'id':'magica','name':'Tinta Mágica','price':5,'days':7},{'id':'autor','name':'Etiqueta de Autor','price':10,'days':30},{'id':'marcador','name':'Marcador de Página','price':3,'days':1},{'id':'broche','name':'Broche Kayepad','price':8,'days':30},{'id':'vela','name':'Vela Nota','price':5,'days':7},{'id':'exlibris','name':'Ex-Libris','price':10,'days':14}]}
+ return {'normal':[{'id':'selo','name':'Selo','price':2800,'permanent':True},{'id':'ticket','name':'Ticket','price':5,'permanent':False}],'special':[{'id':'magica','name':'Tinta Mágica','price':5,'days':7},{'id':'autor','name':'Etiqueta de Autor','price':10,'days':30},{'id':'marcador','name':'Marcador de Página','price':3,'days':1},{'id':'broche','name':'Broche Kayepad','price':8,'days':30},{'id':'vela','name':'Vela Nota','price':5,'days':7},{'id':'exlibris','name':'Ex-Libris','price':10,'days':14}]}
 @app.get('/me/ke-wallet')
 def ke_wallet_me(u=Depends(me)):
  with Session(engine) as s:return ke_wallet(s,s.get(KUser,u.id))
 @app.post('/ke-store/buy/{item}')
 def ke_buy(item:str,u=Depends(me)):
  with Session(engine) as s:
-  x=s.get(KUser,u.id); prices={'selo':50,'ticket':5}
+  x=s.get(KUser,u.id); prices={'selo':2800,'ticket':600}
   if item not in prices: raise HTTPException(400,'Use a carteira de Coins Especiais para este artigo')
   if item=='selo' and owns_item(s,x.id,'selo'): raise HTTPException(409,'Você já possui o Selo')
   if x.coins<prices[item]: raise HTTPException(400,'Coins insuficientes')
   x.coins-=prices[item]
-  if item=='selo': x.badge='selo';x.verified=True;s.add(KPurchase(user_id=x.id,item='selo',cost=prices[item]))
+  if item=='selo':
+   x.badge='selo';x.verified=True;s.add(KPurchase(user_id=x.id,item='selo',cost=prices[item]));s.add(KSealState(user_id=x.id,active=True,expires_at=datetime.now(UTC)+timedelta(days=30)))
   else:
    inv=s.get(KTicketInventory,x.id) or KTicketInventory(user_id=x.id,quantity=0);inv.quantity+=1;s.add(inv)
   s.add(x);s.commit();return ke_wallet(s,x)
