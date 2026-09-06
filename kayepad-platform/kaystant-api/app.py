@@ -137,7 +137,7 @@ def add_ink(post_id:UUID,d:InkIn,u=Depends(me)):
   if existing: raise HTTPException(409,'Você já deixou tinta nesta publicação')
   x=s.get(KUser,u.id)
   if x.ink<d.amount: raise HTTPException(400,'Você não tem tinta suficiente')
-  x.ink-=d.amount;p.ink_total+=d.amount;s.add(KInk(post_id=post_id,user_id=u.id,amount=d.amount,color=x.ink_color));s.commit();return post_json(s,p)
+  x.ink-=d.amount;p.ink_total+=d.amount;s.add(KInk(post_id=post_id,user_id=u.id,amount=d.amount,color=x.ink_color));update_ticket(s,p,u,d.amount);s.commit();return post_json(s,p)
 @app.post('/posts/{post_id}/redeem')
 def redeem(post_id:UUID,u=Depends(me)):
  with Session(engine) as s:
