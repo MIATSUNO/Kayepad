@@ -28,6 +28,8 @@ class KInk(SQLModel,table=True):
  __tablename__='kt_inks'; id:UUID=DBField(default_factory=uuid4,primary_key=True); post_id:UUID=DBField(index=True); user_id:UUID=DBField(index=True); amount:int=1; color:str; created_at:datetime=DBField(default_factory=lambda:datetime.now(UTC))
 class KPurchase(SQLModel,table=True):
  __tablename__='kt_purchases'; id:UUID=DBField(default_factory=uuid4,primary_key=True); user_id:UUID=DBField(index=True); item:str; cost:int; created_at:datetime=DBField(default_factory=lambda:datetime.now(UTC))
+class KActivity(SQLModel,table=True):
+ __tablename__='kt_activity'; id:UUID=DBField(default_factory=uuid4,primary_key=True); user_id:UUID=DBField(index=True); day:str=DBField(index=True); last_seen:datetime=DBField(default_factory=lambda:datetime.now(UTC))
 
 class Signup(BaseModel): email:str; username:str=Field(min_length=3,max_length=40); password:str=Field(min_length=8,max_length=128); full_name:str=Field(default='',max_length=100)
 ALLOWED_EMAIL_DOMAINS={'gmail.com','googlemail.com','hotmail.com','outlook.com','kaystant.org'}
@@ -58,7 +60,12 @@ def me(authorization: str|None=Header(None)):
  with Session(engine) as s:
   ss=s.exec(select(KSession).where(KSession.token_hash==h,KSession.revoked==False)).first(); u=s.get(KUser,ss.user_id) if ss else None
   if not ss or not u or ss.expires_at.replace(tzinfo=UTC)<datetime.now(UTC): raise HTTPException(401,'Sessão expirada')
-  return u
+ with Session(engine) as a:
+  day=datetime.now(UTC).date().isoformat(); row=a.exec(select(KActivity).where(KActivity.user_id==u.id,KActivity.day==day)).first()
+  if row: row.last_seen=datetime.now(UTC); a.add(row)
+  else: a.add(KActivity(user_id=u.id,day=day))
+  a.commit()
+ return u
 def user_json(u): return {'id':str(u.id),'username':u.username,'bio':u.bio,'ink_color':u.ink_color,'coins':u.coins,'ink':u.ink,'badge':u.badge,'banner_url':u.banner_url,'display_name':u.display_name,'show_display_name':u.show_display_name,'links':json.loads(u.links_json or '[]'),'theme':u.theme,'avatar':json.loads(u.avatar_json or '{}'),'instagram_handle':u.instagram_handle,'verified':u.verified}
 def post_json(s,p):
  u=s.get(KUser,p.user_id); return {'id':str(p.id),'title':p.title,'category':p.category,'body':p.body,'ink_total':p.ink_total,'ink_goal':p.ink_goal,'fill':min(100,round(p.ink_total/p.ink_goal*100)),'coins_awarded':p.coins_awarded,'redeemed':bool(p.redeemed_at),'author':user_json(u),'created_at':p.created_at,'full_name':p.full_name,'article_date':p.article_date,'article_location':p.article_location,'data_used':p.data_used,'rights':p.rights,'sources':p.sources}
@@ -97,6 +104,21 @@ def patch_me(d:ProfileIn,u=Depends(me)):
    val=getattr(d,key)
    if val is not None: setattr(x,key,val)
   s.add(x); s.commit(); s.refresh(x); return user_json(x)
+@app.get('/rankings')
+def rankings(category:str='active',limit:int=10):
+ with Session(engine) as s:
+  users=s.exec(select(KUser)).all(); rows=[]
+  for u in users:
+   if category=='active':
+    acts=s.exec(select(KActivity).where(KActivity.user_id==u.id)).all(); metric=len({x.day for x in acts}); latest=max((x.last_seen for x in acts),default=None); label=f'{metric} dias ativos'
+   elif category=='authors':
+    metric=len(s.exec(select(KPost).where(KPost.user_id==u.id)).all()); latest=None; label=f'{metric} publicações'
+   elif category=='ink':
+    metric=sum(x.amount for x in s.exec(select(KInk).where(KInk.user_id==u.id)).all()); latest=None; label=f'{metric} tintas deixadas'
+   else: raise HTTPException(400,'Categoria de ranking inválida')
+   rows.append({'user':user_json(u),'metric':metric,'label':label,'latest':latest})
+  rows.sort(key=lambda x:(x['metric'],x['latest'] or datetime.min.replace(tzinfo=UTC)),reverse=True)
+  return [{k:v for k,v in x.items() if k!='latest'} for x in rows[:min(limit,50)]]
 @app.get('/feed')
 def feed(limit:int=30):
  with Session(engine) as s: return [post_json(s,p) for p in s.exec(select(KPost).order_by(KPost.created_at.desc()).limit(min(limit,100))).all()]
