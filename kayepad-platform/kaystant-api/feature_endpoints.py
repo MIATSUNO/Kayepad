@@ -134,18 +134,18 @@ def ke_buy(item:str,u=Depends(me)):
   s.add(x);s.commit();return ke_wallet(s,x)
 @app.post('/tickets/use')
 def use_ticket(d:TicketUseIn,u=Depends(me)):
- with Session(engine) as s:
-  inv=s.get(KTicketInventory,u.id);p=s.get(KPost,d.post_id)
-  if not inv:
-   legacy=s.exec(select(KPurchase).where(KPurchase.user_id==u.id,KPurchase.item=='ticket')).all()
-   if legacy: inv=KTicketInventory(user_id=u.id,quantity=len(legacy));s.add(inv);s.flush()
-  if not inv or inv.quantity<1: raise HTTPException(400,'Você não tem Tickets disponíveis')
-  if not p or p.user_id!=u.id: raise HTTPException(403,'Escolha uma publicação sua')
-  if s.exec(select(KTicket).where(KTicket.post_id==p.id,KTicket.status=='ativo')).first(): raise HTTPException(409,'Esta publicação já tem um Ticket ativo')
-  inv.quantity-=1;t=KTicket(user_id=u.id,post_id=p.id,meta=d.meta,start_ink=p.ink_total,expires_at=datetime.now(UTC)+timedelta(hours=1));s.add(inv);s.add(t)
-  try: s.commit()
-  except Exception as e: s.rollback(); raise HTTPException(500,'Ticket não pôde ser ativado: '+str(e)[:240])
-  return _ticket_json(t)
+ try:
+  with Session(engine) as s:
+   inv=s.get(KTicketInventory,u.id);p=s.get(KPost,d.post_id)
+   if not inv:
+    legacy=s.exec(select(KPurchase).where(KPurchase.user_id==u.id,KPurchase.item=='ticket')).all()
+    if legacy: inv=KTicketInventory(user_id=u.id,quantity=len(legacy));s.add(inv);s.flush()
+   if not inv or inv.quantity<1: raise HTTPException(400,'Você não tem Tickets disponíveis')
+   if not p or p.user_id!=u.id: raise HTTPException(403,'Escolha uma publicação sua')
+   if s.exec(select(KTicket).where(KTicket.post_id==p.id,KTicket.status=='ativo')).first(): raise HTTPException(409,'Esta publicação já tem um Ticket ativo')
+   inv.quantity-=1;t=KTicket(user_id=u.id,post_id=p.id,meta=d.meta,start_ink=p.ink_total,expires_at=datetime.now(UTC)+timedelta(hours=1));s.add(inv);s.add(t);s.commit();return _ticket_json(t)
+ except HTTPException: raise
+ except Exception as e: raise HTTPException(500,'Ticket não pôde ser ativado: '+str(e)[:240])
 @app.post('/special/buy')
 def special_buy(d:SpecialBuyIn,u=Depends(me)):
  prices={'magica':5,'autor':10,'marcador':3,'broche':8,'vela':5,'exlibris':10};days={'magica':7,'autor':30,'marcador':1,'broche':30,'vela':7,'exlibris':14}
