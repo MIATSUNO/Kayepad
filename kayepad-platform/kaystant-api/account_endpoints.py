@@ -27,8 +27,8 @@ def delete_account(d:DeleteAccountIn,u=Depends(me)):
   for model in (KSession,KPurchase,KActivity):
    for row in s.exec(select(model).where(model.user_id==u.id)).all(): s.delete(row)
   for row in s.exec(select(KInk).where(KInk.user_id==u.id)).all(): s.delete(row)
+  s.execute(text("DELETE FROM kt_group_members WHERE user_id = CAST(:uid AS uuid) OR group_id IN (SELECT id FROM kt_groups WHERE owner_id = CAST(:uid AS uuid))"), {'uid':str(u.id)})
   for row in s.exec(select(KGroup).where(KGroup.owner_id==u.id)).all(): s.delete(row)
-  for row in s.exec(select(KGroupMember).where(KGroupMember.user_id==u.id)).all(): s.delete(row)
   s.execute(text("DELETE FROM kt_pet_interactions WHERE visitor_id = CAST(:uid AS uuid) OR pet_id IN (SELECT id FROM kt_pets WHERE user_id = CAST(:uid AS uuid))"), {'uid':str(u.id)})
   s.execute(text("DELETE FROM kt_pets WHERE user_id = CAST(:uid AS uuid)"), {'uid':str(u.id)})
   s.delete(s.get(KUser,u.id));s.commit();return {'deleted':True}
