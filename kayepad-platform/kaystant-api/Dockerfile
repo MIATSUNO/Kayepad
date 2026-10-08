@@ -6,5 +6,6 @@ COPY app.py .
 COPY feature_endpoints.py .
 COPY account_endpoints.py .
 COPY auth_endpoints.py .
+COPY social_delivery_endpoints.py .
 EXPOSE 8000
 CMD ["uvicorn","app:app","--host","0.0.0.0","--port","8000"]
