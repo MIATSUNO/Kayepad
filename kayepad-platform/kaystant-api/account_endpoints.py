@@ -1,4 +1,4 @@
-from app import app, Session, engine, select, KUser, KSession, KPost, KInk, KPurchase, KGroup, KGroupMember, KPet, KBook, KBookPost, KPetTouch, Depends, HTTPException, me
+from app import app, Session, engine, select, KUser, KSession, KActivity, KPost, KInk, KPurchase, KGroup, KGroupMember, KBook, KBookPost, Depends, HTTPException, me
 from pydantic import BaseModel
 class DeleteAccountIn(BaseModel): confirmation:str
 @app.delete('/account')
@@ -15,11 +15,20 @@ def delete_account(d:DeleteAccountIn,u=Depends(me)):
    for row in s.exec(select(KDeliveryNotice).where(or_(KDeliveryNotice.user_id==u.id,KDeliveryNotice.delivery_id.in_(delivery_ids)))).all(): s.delete(row)
    for row in deliveries: s.delete(row)
   posts=s.exec(select(KPost).where(KPost.user_id==u.id)).all(); post_ids=[p.id for p in posts]
+  from sqlalchemy import text
+  # Delete dependent joins before their parent rows, using only known schema columns.
+  owned_books=s.exec(select(KBook).where(KBook.owner_id==u.id)).all(); book_ids=[b.id for b in owned_books]
+  if post_ids:
+   for row in s.exec(select(KBookPost).where(KBookPost.post_id.in_(post_ids))).all(): s.delete(row)
+  if book_ids:
+   for row in s.exec(select(KBookPost).where(KBookPost.book_id.in_(book_ids))).all(): s.delete(row)
+  for b in owned_books: s.delete(b)
   for p in posts: s.delete(p)
-  for model in (KSession,KPurchase,KPet):
+  for model in (KSession,KPurchase,KActivity):
    for row in s.exec(select(model).where(model.user_id==u.id)).all(): s.delete(row)
   for row in s.exec(select(KInk).where(KInk.user_id==u.id)).all(): s.delete(row)
   for row in s.exec(select(KGroup).where(KGroup.owner_id==u.id)).all(): s.delete(row)
   for row in s.exec(select(KGroupMember).where(KGroupMember.user_id==u.id)).all(): s.delete(row)
-  for row in s.exec(select(KPetTouch).where(KPetTouch.visitor_id==u.id)).all(): s.delete(row)
+  s.execute(text("DELETE FROM kt_pet_interactions WHERE visitor_id = CAST(:uid AS uuid) OR pet_id IN (SELECT id FROM kt_pets WHERE user_id = CAST(:uid AS uuid))"), {'uid':str(u.id)})
+  s.execute(text("DELETE FROM kt_pets WHERE user_id = CAST(:uid AS uuid)"), {'uid':str(u.id)})
   s.delete(s.get(KUser,u.id));s.commit();return {'deleted':True}
