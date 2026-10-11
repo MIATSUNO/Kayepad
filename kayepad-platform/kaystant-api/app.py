@@ -19,7 +19,7 @@ origins=[x.strip() for x in os.getenv('CORS_ORIGINS','https://kayepad.neocities.
 app.add_middleware(CORSMiddleware,allow_origins=origins,allow_methods=['GET','POST','PATCH','DELETE','OPTIONS'],allow_headers=['Authorization','Content-Type'])
 
 class KUser(SQLModel,table=True):
- __tablename__='kt_users'; id:UUID=DBField(default_factory=uuid4,primary_key=True); email:str=DBField(unique=True,index=True); username:str=DBField(unique=True,index=True); password_hash:str; bio:str=''; ink_color:str='#5367d8'; coins:int=0; ink:int=18; badge:str='normal'; banner_url:str=''; display_name:str=''; show_display_name:bool=True; links_json:str='[]'; theme:str='paper'; avatar_json:str='{}'; instagram_handle:str=''; username_changed_at:datetime|None=None; verified:bool=False; created_at:datetime=DBField(default_factory=lambda:datetime.now(UTC))
+ __tablename__='kt_users'; id:UUID=DBField(default_factory=uuid4,primary_key=True); email:str=DBField(unique=True,index=True); username:str=DBField(unique=True,index=True); password_hash:str; bio:str=''; ink_color:str='#5367d8'; coins:int=0; ink:int=18; badge:str='normal'; banner_url:str=''; display_name:str=''; show_display_name:bool=True; links_json:str='[]'; theme:str='paper'; avatar_json:str='{}'; instagram_handle:str=''; username_changed_at:datetime|None=None; verified:bool=False; is_blocked:bool=False; created_at:datetime=DBField(default_factory=lambda:datetime.now(UTC))
 class KSession(SQLModel,table=True):
  __tablename__='kt_sessions'; id:UUID=DBField(default_factory=uuid4,primary_key=True); user_id:UUID=DBField(index=True); token_hash:str=DBField(unique=True,index=True); expires_at:datetime; revoked:bool=False
 class KPost(SQLModel,table=True):
@@ -44,8 +44,12 @@ class InkIn(BaseModel): amount:int=Field(default=1,ge=1,le=10)
 def startup():
  if not sqlite:
   with engine.begin() as c:
-   c.execute(text("ALTER TABLE kt_users ADD COLUMN IF NOT EXISTS display_name TEXT DEFAULT ''")); c.execute(text("ALTER TABLE kt_users ADD COLUMN IF NOT EXISTS show_display_name BOOLEAN DEFAULT TRUE")); c.execute(text("ALTER TABLE kt_users ADD COLUMN IF NOT EXISTS links_json TEXT DEFAULT '[]'")); c.execute(text("ALTER TABLE kt_users ADD COLUMN IF NOT EXISTS theme TEXT DEFAULT 'paper'")); c.execute(text("ALTER TABLE kt_posts ADD COLUMN IF NOT EXISTS full_name TEXT DEFAULT ''")); c.execute(text("ALTER TABLE kt_posts ADD COLUMN IF NOT EXISTS article_date TEXT DEFAULT ''")); c.execute(text("ALTER TABLE kt_posts ADD COLUMN IF NOT EXISTS article_location TEXT DEFAULT ''")); c.execute(text("ALTER TABLE kt_posts ADD COLUMN IF NOT EXISTS data_used TEXT DEFAULT ''")); c.execute(text("ALTER TABLE kt_posts ADD COLUMN IF NOT EXISTS rights TEXT DEFAULT ''")); c.execute(text("ALTER TABLE kt_posts ADD COLUMN IF NOT EXISTS sources TEXT DEFAULT ''")); c.execute(text("ALTER TABLE kt_users ADD COLUMN IF NOT EXISTS avatar_json TEXT DEFAULT '{}'")); c.execute(text("ALTER TABLE kt_posts DROP CONSTRAINT IF EXISTS kt_posts_ink_goal_check")); c.execute(text("UPDATE kt_posts SET ink_goal=10 WHERE ink_goal<>10")); c.execute(text("ALTER TABLE kt_posts ADD CONSTRAINT kt_posts_ink_goal_check CHECK (ink_goal BETWEEN 1 AND 10)")); c.execute(text("ALTER TABLE kt_users ADD COLUMN IF NOT EXISTS instagram_handle TEXT DEFAULT ''")); c.execute(text("ALTER TABLE kt_users ADD COLUMN IF NOT EXISTS username_changed_at TIMESTAMP"))
+   c.execute(text("ALTER TABLE kt_users ADD COLUMN IF NOT EXISTS display_name TEXT DEFAULT ''")); c.execute(text("ALTER TABLE kt_users ADD COLUMN IF NOT EXISTS show_display_name BOOLEAN DEFAULT TRUE")); c.execute(text("ALTER TABLE kt_users ADD COLUMN IF NOT EXISTS links_json TEXT DEFAULT '[]'")); c.execute(text("ALTER TABLE kt_users ADD COLUMN IF NOT EXISTS theme TEXT DEFAULT 'paper'")); c.execute(text("ALTER TABLE kt_posts ADD COLUMN IF NOT EXISTS full_name TEXT DEFAULT ''")); c.execute(text("ALTER TABLE kt_posts ADD COLUMN IF NOT EXISTS article_date TEXT DEFAULT ''")); c.execute(text("ALTER TABLE kt_posts ADD COLUMN IF NOT EXISTS article_location TEXT DEFAULT ''")); c.execute(text("ALTER TABLE kt_posts ADD COLUMN IF NOT EXISTS data_used TEXT DEFAULT ''")); c.execute(text("ALTER TABLE kt_posts ADD COLUMN IF NOT EXISTS rights TEXT DEFAULT ''")); c.execute(text("ALTER TABLE kt_posts ADD COLUMN IF NOT EXISTS sources TEXT DEFAULT ''")); c.execute(text("ALTER TABLE kt_users ADD COLUMN IF NOT EXISTS avatar_json TEXT DEFAULT '{}'")); c.execute(text("ALTER TABLE kt_posts DROP CONSTRAINT IF EXISTS kt_posts_ink_goal_check")); c.execute(text("UPDATE kt_posts SET ink_goal=10 WHERE ink_goal<>10")); c.execute(text("ALTER TABLE kt_posts ADD CONSTRAINT kt_posts_ink_goal_check CHECK (ink_goal BETWEEN 1 AND 10)")); c.execute(text("ALTER TABLE kt_users ADD COLUMN IF NOT EXISTS instagram_handle TEXT DEFAULT ''")); c.execute(text("ALTER TABLE kt_users ADD COLUMN IF NOT EXISTS username_changed_at TIMESTAMP")); c.execute(text("ALTER TABLE kt_users ADD COLUMN IF NOT EXISTS is_blocked BOOLEAN NOT NULL DEFAULT FALSE"))
  SQLModel.metadata.create_all(engine)
+ if sqlite:
+  with engine.begin() as c:
+   columns={row[1] for row in c.execute(text("PRAGMA table_info(kt_users)"))}
+   if 'is_blocked' not in columns: c.execute(text("ALTER TABLE kt_users ADD COLUMN is_blocked BOOLEAN NOT NULL DEFAULT 0"))
  with engine.begin() as c: c.execute(text("CREATE TABLE IF NOT EXISTS kt_password_resets (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, token_hash TEXT UNIQUE NOT NULL, expires_at TIMESTAMP NOT NULL, used BOOLEAN NOT NULL DEFAULT FALSE)"))
 @app.get('/health')
 def health(): return {'status':'ok','service':'kaystant-api'}
@@ -60,6 +64,7 @@ def me(authorization: str|None=Header(None)):
  with Session(engine) as s:
   ss=s.exec(select(KSession).where(KSession.token_hash==h,KSession.revoked==False)).first(); u=s.get(KUser,ss.user_id) if ss else None
   if not ss or not u or ss.expires_at.replace(tzinfo=UTC)<datetime.now(UTC): raise HTTPException(401,'Sessão expirada')
+  if u.is_blocked: raise HTTPException(403,'Esta conta está bloqueada')
  with Session(engine) as a:
   day=datetime.now(UTC).date().isoformat(); row=a.exec(select(KActivity).where(KActivity.user_id==u.id,KActivity.day==day)).first()
   if row: row.last_seen=datetime.now(UTC); a.add(row)
@@ -84,6 +89,7 @@ def login(d:Login):
  if not allowed_email(d.email): raise HTTPException(422,'Domínio de e-mail não permitido')
  with Session(engine) as s: u=s.exec(select(KUser).where(KUser.email==d.email.lower())).first()
  if not u or not bcrypt.checkpw(d.password.encode(),u.password_hash.encode()): raise HTTPException(401,'Credenciais inválidas')
+ if u.is_blocked: raise HTTPException(403,'Esta conta está bloqueada')
  return {'user':user_json(u),'token':issue(u)}
 @app.post('/auth/logout')
 def logout(authorization: str|None=Header(None)):
@@ -163,7 +169,6 @@ def shop(item:str,u=Depends(me)):
   if item=='caneta': x.badge='verificado';x.verified=True
   s.commit();return {'item':item,'user':user_json(x)}
 
-# --- Kaystant second layer: pets, groups, books and author highlights ---
 class KGroup(SQLModel, table=True):
  __tablename__='kt_groups'; id:UUID=DBField(default_factory=uuid4,primary_key=True); owner_id:UUID=DBField(index=True); name:str; hashtag:str=DBField(unique=True); rules:str=''; image_url:str=''; created_at:datetime=DBField(default_factory=lambda:datetime.now(UTC))
 class KGroupMember(SQLModel, table=True):
@@ -245,3 +250,4 @@ from account_endpoints import *
 from auth_endpoints import *
 
 from social_delivery_endpoints import *
+from admin_endpoints import *
