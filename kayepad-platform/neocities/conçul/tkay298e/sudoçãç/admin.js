@@ -43,7 +43,9 @@ const api=async(path,options={})=>{
  try{response=await fetch(API+path,{...options,headers})}catch(e){throw Error('Não foi possível alcançar o servidor. Tente novamente.')}
  const data=await response.json().catch(()=>({}));
  if(!response.ok){
-  if(response.status===401&&adminToken&&token===adminToken){const oldPrimary=primaryToken;clearSensitiveState('A sessão administrativa expirou. Entre e confirme novamente.');if(oldPrimary&&API)fetch(API+'/auth/logout',{method:'POST',headers:{Authorization:'Bearer '+oldPrimary}}).catch(()=>{})}
+  const expiredAdminToken=adminToken&&token===adminToken;
+  const expiredPrimarySession=/verifica(?:ção|cao) expirada|sessão expirada/i.test(data.detail||'');
+  if(response.status===401&&token&&(expiredAdminToken||expiredPrimarySession)){const oldPrimary=primaryToken;clearSensitiveState('A sessão expirou. Entre e confirme novamente.');if(oldPrimary&&API)fetch(API+'/auth/logout',{method:'POST',headers:{Authorization:'Bearer '+oldPrimary}}).catch(()=>{})}
   throw Error(data.detail||'A solicitação não foi autorizada.')
  }
  return data

@@ -2,6 +2,10 @@
 const API=(window.KAYSTANT_API||'').replace(/\/$/,'');
 const $=id=>document.getElementById(id);
 let token='';
+let primaryToken='';
+let adminToken='';
+let challengeToken='';
+let currentStep=2;
 let currentUser=null;
 let users=[];
 let posts=[];
@@ -9,6 +13,12 @@ let selectedUserId='';
 const loginCard=$('login-card');
 const panel=$('admin-panel');
 const loginMessage=$('login-message');
+const stepupCard=$('stepup-card');
+const stepupMessage=$('stepup-message');
+const stepupQuestion=$('stepup-question');
+const stepCount=$('step-count');
+const stepDots=$('step-dots');
+const stepupAnswer=$('stepup-answer');
 const panelMessage=$('panel-message');
 const userRows=$('user-rows');
 const userFilter=$('user-filter');
@@ -16,6 +26,8 @@ const userDetail=$('selected-user');
 const actionSelect=$('action');
 const postSelect=$('post-select');
 const postLabel=$('post-label');
+const blockConfirmWrap=$('block-confirm-wrap');
+const blockConfirm=$('block-confirm');
 const sqlOutput=$('sql-output');
 const generateButton=$('generate-button');
 const copyButton=$('copy-button');
@@ -30,7 +42,12 @@ const api=async(path,options={})=>{
  let response;
  try{response=await fetch(API+path,{...options,headers})}catch(e){throw Error('Não foi possível alcançar o servidor. Tente novamente.')}
  const data=await response.json().catch(()=>({}));
- if(!response.ok)throw Error(data.detail||'A solicitação não foi autorizada.');
+ if(!response.ok){
+  const expiredAdminToken=adminToken&&token===adminToken;
+  const expiredPrimarySession=/verifica(?:ção|cao) expirada|sessão expirada/i.test(data.detail||'');
+  if(response.status===401&&token&&(expiredAdminToken||expiredPrimarySession)){const oldPrimary=primaryToken;clearSensitiveState('A sessão expirou. Entre e confirme novamente.');if(oldPrimary&&API)fetch(API+'/auth/logout',{method:'POST',headers:{Authorization:'Bearer '+oldPrimary}}).catch(()=>{})}
+  throw Error(data.detail||'A solicitação não foi autorizada.')
+ }
  return data
 };
 const formatDate=value=>{
@@ -68,20 +85,36 @@ function renderPosts(){
  if(!ownPosts.length){const option=document.createElement('option');option.value='';option.textContent='Nenhuma publicação desta conta';postSelect.append(option);return}
  for(const post of ownPosts){const option=document.createElement('option');option.value=post.id;option.textContent=`${post.title} · ${formatDate(post.created_at)}`;postSelect.append(option)}
 }
+function renderSelectedUser(user,isAdmin){
+ userDetail.replaceChildren();
+ if(!user){userDetail.textContent='Selecione uma conta.';return}
+ const fields=[
+  ['Usuário','@'+(user.username||'—')],
+  ['Nome definido',user.display_name||'—'],
+  ['Email',user.email||'—'],
+  ['Cadastro',formatDate(user.created_at)],
+  ['Bio',user.bio||'—'],
+  ['Acesso',user.is_blocked?'Bloqueada':'Ativa']
+ ];
+ if(isAdmin)fields.push(['Proteção','Conta administrativa protegida']);
+ for(const [label,value] of fields){const line=document.createElement('p');const title=document.createElement('strong');title.textContent=label+':';line.append(title,document.createTextNode(' '+String(value)));userDetail.append(line)}
+}
 function updateControls(){
  const user=selectedUser();
  const action=actionSelect.value;
  postLabel.hidden=action!=='delete-post';
  postSelect.hidden=action!=='delete-post';
+ blockConfirmWrap.hidden=action!=='block';
  const isAdmin=isProtectedAdmin(user);
- generateButton.disabled=!user||isAdmin||(action==='delete-post'&&!postSelect.value)||(action==='block'&&user.is_blocked)||(action==='unblock'&&!user.is_blocked);
+ blockConfirmWrap.hidden=action!=='block'&&action!=='unblock';
+ $('action-confirm-text').textContent=action==='unblock'?'Confirme que revisou o pedido por email e decidiu desbloquear.':'Confirme que analisou o relato e avisou a pessoa antes de bloquear.';
+ generateButton.disabled=!user||isAdmin||(action==='delete-post'&&!postSelect.value)||((action==='block'||action==='unblock')&&!blockConfirm.checked)||(action==='block'&&user.is_blocked)||(action==='unblock'&&!user.is_blocked);
  copyButton.disabled=!sqlOutput.value;
- if(isAdmin)userDetail.textContent='@'+user.username+' · Conta administrativa protegida';
- else if(user)userDetail.textContent='@'+user.username+' · '+(user.is_blocked?'Acesso bloqueado':'Acesso ativo');
- else userDetail.textContent='Selecione uma conta.'
+ renderSelectedUser(user,isAdmin)
 }
 function selectUser(id){
  selectedUserId=id;
+ blockConfirm.checked=false;
  renderUsers();
  renderPosts();
  sqlOutput.value='';
@@ -107,7 +140,18 @@ async function loadData(){
  users=userData;posts=postData;
  if(!users.some(user=>user.id===selectedUserId))selectedUserId=(users.find(user=>user.id!==currentUser.id)||users[0]||{}).id||'';
  renderUsers();renderPosts();updateControls();
- setMessage(panelMessage,`Lista atualizada: ${users.length} contas e ${posts.length} publicações.`,'success')
+ const time=new Intl.DateTimeFormat('pt-BR',{hour:'2-digit',minute:'2-digit',second:'2-digit'}).format(new Date());
+ setMessage(panelMessage,`Consulta às ${time}: ${users.length} contas e ${posts.length} publicações.`,'success')
+}
+function updateStepup(data){
+ currentStep=data.step;
+ challengeToken=data.challenge||challengeToken;
+ stepupQuestion.textContent=data.question||'';
+ stepupQuestion.setAttribute('translate',currentStep===3?'no':'yes');
+ stepCount.textContent=`Faltam ${data.remaining} etapas para liberar o painel`;
+ [...stepDots.children].forEach((dot,index)=>dot.classList.toggle('done',index<3-data.remaining));
+ stepupAnswer.value='';
+ setMessage(stepupMessage,'');
 }
 $('login-form').addEventListener('submit',async event=>{
  event.preventDefault();
@@ -115,17 +159,31 @@ $('login-form').addEventListener('submit',async event=>{
  const button=$('login-button');button.disabled=true;setMessage(loginMessage,'Verificando a conta no servidor…');
  try{
   const result=await api('/auth/login',{method:'POST',body:{email:$('email').value.trim(),password:$('password').value}});
-  token=result.token;currentUser=result.user;$('password').value='';
-  const [userData,postData]=await Promise.all([api('/admin/users'),api('/admin/posts')]);
-  if(!Array.isArray(userData)||!Array.isArray(postData))throw Error('A resposta do servidor não está no formato esperado.');
-  users=userData;posts=postData;selectedUserId=(users.find(user=>user.id!==currentUser.id)||users[0]||{}).id||currentUser.id;
-  loginCard.hidden=true;panel.hidden=false;renderUsers();renderPosts();updateControls();
-  setMessage(panelMessage,`Acesso autorizado. ${users.length} contas e ${posts.length} publicações carregadas.`,'success')
+  primaryToken=result.token;token=primaryToken;currentUser=result.user;$('password').value='';
+  const verification=await api('/admin/step-up/start',{method:'POST'});
+  updateStepup(verification);loginCard.hidden=true;stepupCard.hidden=false;stepupAnswer.focus();
  }catch(error){
-  if(token){const oldToken=token;token='';fetch(API+'/auth/logout',{method:'POST',headers:{Authorization:'Bearer '+oldToken}}).catch(()=>{})}
-  currentUser=null;users=[];posts=[];
+  if(primaryToken)fetch(API+'/auth/logout',{method:'POST',headers:{Authorization:'Bearer '+primaryToken}}).catch(()=>{});
+  token='';primaryToken='';adminToken='';challengeToken='';currentUser=null;users=[];posts=[];
   setMessage(loginMessage,error.message||'Não foi possível entrar no painel.','error')
  }finally{button.disabled=false}
+});
+$('stepup-form').addEventListener('submit',async event=>{
+ event.preventDefault();
+ const button=$('stepup-submit');button.disabled=true;setMessage(stepupMessage,'Validando a etapa no servidor…');
+ try{
+  const result=await api('/admin/step-up/answer',{method:'POST',body:{challenge:challengeToken,answer:stepupAnswer.value}});
+  if(result.completed){
+   adminToken=result.admin_token;token=adminToken;challengeToken='';stepupCard.hidden=true;panel.hidden=false;
+   await loadData();setMessage(panelMessage,`Acesso autorizado por 15 minutos. ${users.length} contas e ${posts.length} publicações carregadas.`,'success');
+  }else{updateStepup(result);setMessage(stepupMessage,'Etapa validada. Continue.','success');stepupAnswer.focus()}
+ }catch(error){stepupAnswer.value='';setMessage(stepupMessage,error.message||'Não foi possível validar a etapa.','error')}
+ finally{button.disabled=false}
+});
+$('stepup-cancel').addEventListener('click',()=>{
+ const oldToken=primaryToken;
+ clearSensitiveState('Verificação cancelada.');
+ if(oldToken)fetch(API+'/auth/logout',{method:'POST',headers:{Authorization:'Bearer '+oldToken}}).catch(()=>{})
 });
 $('refresh-button').addEventListener('click',async()=>{
  $('refresh-button').disabled=true;setMessage(panelMessage,'Atualizando…');
@@ -133,25 +191,26 @@ $('refresh-button').addEventListener('click',async()=>{
  finally{$('refresh-button').disabled=false}
 });
 $('logout-button').addEventListener('click',async()=>{
- const oldToken=token;
- token='';currentUser=null;users=[];posts=[];selectedUserId='';sqlOutput.value='';
+ const oldToken=primaryToken;
+ clearSensitiveState('Você saiu do painel.');
  if(oldToken)try{await fetch(API+'/auth/logout',{method:'POST',headers:{Authorization:'Bearer '+oldToken}})}catch(e){}
- panel.hidden=true;loginCard.hidden=false;$('login-form').reset();setMessage(loginMessage,'Você saiu do painel.','success');updateControls()
 });
 userFilter.addEventListener('input',renderUsers);
-actionSelect.addEventListener('change',()=>{sqlOutput.value='';updateControls()});
+actionSelect.addEventListener('change',()=>{sqlOutput.value='';blockConfirm.checked=false;updateControls()});
 postSelect.addEventListener('change',()=>{sqlOutput.value='';updateControls()});
+blockConfirm.addEventListener('change',updateControls);
 $('generate-button').addEventListener('click',()=>{
  const user=selectedUser();
  if(!user||!currentUser){setMessage(panelMessage,'Selecione uma conta.','error');return}
  if(isProtectedAdmin(user)){setMessage(panelMessage,'Contas administrativas e suas publicações estão protegidas.','error');return}
+ if((actionSelect.value==='block'||actionSelect.value==='unblock')&&!blockConfirm.checked){setMessage(panelMessage,actionSelect.value==='block'?'Antes do bloqueio, confirme que analisou o relato e avisou a pessoa.':'Antes de desbloquear, confirme que revisou o pedido por email e decidiu liberar o acesso.','error');return}
  try{
   const protectedIds=protectedAdminIds();
   if(actionSelect.value==='delete-user')sqlOutput.value=sqlDeleteUser(user.id,protectedIds);
   else if(actionSelect.value==='delete-post')sqlOutput.value=sqlDeletePost(user.id,postSelect.value,protectedIds);
   else if(actionSelect.value==='block')sqlOutput.value=sqlSetBlocked(user.id,true,protectedIds);
   else if(actionSelect.value==='unblock')sqlOutput.value=sqlSetBlocked(user.id,false,protectedIds);
-  setMessage(panelMessage,'SQL gerado. Revise antes de executar no projeto quytz da Supabase.','success');
+  setMessage(panelMessage,actionSelect.value==='block'?'SQL gerado após sua confirmação de análise e contato. Revise antes de executar.':'SQL gerado. Revise antes de executar no projeto Kaystant do Supabase.','success');
   updateControls()
  }catch(error){setMessage(panelMessage,error.message||'Não foi possível gerar o SQL.','error')}
 });
@@ -161,9 +220,9 @@ copyButton.addEventListener('click',async()=>{
  catch(error){sqlOutput.focus();sqlOutput.select();setMessage(panelMessage,'Código selecionado. Copie-o manualmente.','')}
 });
 const clearSensitiveState=message=>{
- const oldToken=token;
- token='';currentUser=null;users=[];posts=[];selectedUserId='';sqlOutput.value='';userRows.replaceChildren();userFilter.value='';renderPosts();
- panel.hidden=true;loginCard.hidden=false;$('login-form').reset();setMessage(loginMessage,message||'Entre novamente para abrir o painel.');updateControls();
+ const oldToken=primaryToken;
+ token='';primaryToken='';adminToken='';challengeToken='';currentStep=2;currentUser=null;users=[];posts=[];selectedUserId='';sqlOutput.value='';userRows.replaceChildren();userFilter.value='';stepupQuestion.textContent='';stepupAnswer.value='';blockConfirm.checked=false;renderPosts();
+ panel.hidden=true;stepupCard.hidden=true;loginCard.hidden=false;$('login-form').reset();$('stepup-form').reset();setMessage(loginMessage,message||'Entre novamente para abrir o painel.');setMessage(stepupMessage,'');updateControls();
  return oldToken
 };
 window.addEventListener('pagehide',()=>{
