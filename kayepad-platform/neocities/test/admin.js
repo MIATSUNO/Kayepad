@@ -46,8 +46,8 @@ const makeCell=(row,value)=>{const cell=document.createElement('td');cell.textCo
 function renderUsers(){
  userRows.replaceChildren();
  const query=userFilter.value.trim().toLocaleLowerCase('pt-BR');
- const filtered=users.filter(user=>`${user.username} ${user.email}`.toLocaleLowerCase('pt-BR').includes(query));
- if(!filtered.length){const row=document.createElement('tr');const cell=document.createElement('td');cell.colSpan=4;cell.className='empty';cell.textContent=users.length?'Nenhuma conta corresponde ao filtro.':'Nenhuma conta encontrada.';row.append(cell);userRows.append(row);return}
+ const filtered=users.filter(user=>String(user.username||'').toLocaleLowerCase('pt-BR').includes(query));
+ if(!filtered.length){const row=document.createElement('tr');const cell=document.createElement('td');cell.colSpan=2;cell.className='empty';cell.textContent=users.length?'Nenhuma conta corresponde ao filtro.':'Nenhuma conta encontrada.';row.append(cell);userRows.append(row);return}
  for(const user of filtered){
   const row=document.createElement('tr');
   row.classList.toggle('selected',user.id===selectedUserId);
@@ -56,8 +56,6 @@ function renderUsers(){
   pick.type='button';pick.className='user-pick';pick.textContent='@'+user.username;
   pick.addEventListener('click',()=>selectUser(user.id));
   nameCell.append(pick);row.append(nameCell);
-  makeCell(row,user.email);
-  makeCell(row,formatDate(user.created_at));
   const stateCell=document.createElement('td');
   const state=document.createElement('span');state.className='status'+(user.is_blocked?' blocked':'');state.textContent=user.is_blocked?'Bloqueada':'Ativa';stateCell.append(state);row.append(stateCell);
   userRows.append(row)
@@ -78,8 +76,8 @@ function updateControls(){
  const isAdmin=isProtectedAdmin(user);
  generateButton.disabled=!user||isAdmin||(action==='delete-post'&&!postSelect.value)||(action==='block'&&user.is_blocked)||(action==='unblock'&&!user.is_blocked);
  copyButton.disabled=!sqlOutput.value;
- if(isAdmin)userDetail.textContent='@'+user.username+' · '+user.email+' · Conta administrativa protegida';
- else if(user)userDetail.textContent='@'+user.username+' · '+user.email+' · Cadastro '+formatDate(user.created_at);
+ if(isAdmin)userDetail.textContent='@'+user.username+' · Conta administrativa protegida';
+ else if(user)userDetail.textContent='@'+user.username+' · '+(user.is_blocked?'Acesso bloqueado':'Acesso ativo');
  else userDetail.textContent='Selecione uma conta.'
 }
 function selectUser(id){
