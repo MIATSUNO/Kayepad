@@ -39,6 +39,9 @@ const formatDate=value=>{
  return Number.isNaN(date.getTime())?'—':new Intl.DateTimeFormat('pt-BR',{dateStyle:'short'}).format(date)
 };
 const selectedUser=()=>users.find(user=>user.id===selectedUserId)||null;
+const isProtectedAdmin=user=>Boolean(user&&(user.is_admin||(currentUser&&user.id===currentUser.id)));
+const protectedAdminIds=()=>[...new Set([...users.filter(user=>user.is_admin).map(user=>safeId(user.id)),...(currentUser&&currentUser.id?[safeId(currentUser.id)]:[])])];
+const protectedAdminArray=ids=>{const values=ids.map(id=>`'${safeId(id)}'::uuid`);if(!values.length)throw Error('Nenhuma conta administrativa protegida foi identificada.');return values.join(', ')};
 const makeCell=(row,value)=>{const cell=document.createElement('td');cell.textContent=value;row.append(cell);return cell};
 function renderUsers(){
  userRows.replaceChildren();
@@ -72,8 +75,8 @@ function updateControls(){
  const action=actionSelect.value;
  postLabel.hidden=action!=='delete-post';
  postSelect.hidden=action!=='delete-post';
- const isAdmin=user&&currentUser&&user.id===currentUser.id;
- generateButton.disabled=!user||Boolean(isAdmin)||(action==='delete-post'&&!postSelect.value)||(action==='block'&&user.is_blocked)||(action==='unblock'&&!user.is_blocked);
+ const isAdmin=isProtectedAdmin(user);
+ generateButton.disabled=!user||isAdmin||(action==='delete-post'&&!postSelect.value)||(action==='block'&&user.is_blocked)||(action==='unblock'&&!user.is_blocked);
  copyButton.disabled=!sqlOutput.value;
  if(isAdmin)userDetail.textContent='@'+user.username+' · '+user.email+' · Conta administrativa protegida';
  else if(user)userDetail.textContent='@'+user.username+' · '+user.email+' · Cadastro '+formatDate(user.created_at);
@@ -86,19 +89,19 @@ function selectUser(id){
  sqlOutput.value='';
  updateControls()
 }
-function sqlDeleteUser(userId,adminId){
- const user=safeId(userId),admin=safeId(adminId);
- return `BEGIN;\nDO $$\nDECLARE\n  target_user_id uuid := '${user}'::uuid;\n  admin_user_id uuid := '${admin}'::uuid;\nBEGIN\n  IF target_user_id = admin_user_id THEN\n    RAISE EXCEPTION 'A conta administrativa protegida não pode ser apagada por este painel.';\n  END IF;\n  IF NOT EXISTS (SELECT 1 FROM public.kt_users WHERE id = target_user_id) THEN\n    RAISE EXCEPTION 'A conta selecionada não existe neste projeto.';\n  END IF;\n  DELETE FROM public.kt_kayepad_delivery_feedback\n  WHERE delivery_id IN (SELECT id FROM public.kt_kayepad_deliveries WHERE sender_id = target_user_id OR recipient_id = target_user_id);\n  DELETE FROM public.kt_kayepad_delivery_notices\n  WHERE user_id = target_user_id OR delivery_id IN (SELECT id FROM public.kt_kayepad_deliveries WHERE sender_id = target_user_id OR recipient_id = target_user_id);\n  DELETE FROM public.kt_kayepad_deliveries\n  WHERE sender_id = target_user_id OR recipient_id = target_user_id;\n  DELETE FROM public.kt_pet_interactions\n  WHERE visitor_id = target_user_id OR pet_id IN (SELECT id FROM public.kt_pets WHERE user_id = target_user_id);\n  DELETE FROM public.kt_group_members\n  WHERE user_id = target_user_id OR group_id IN (SELECT id FROM public.kt_groups WHERE owner_id = target_user_id);\n  DELETE FROM public.kt_group_rules\n  WHERE group_id IN (SELECT id FROM public.kt_groups WHERE owner_id = target_user_id);\n  DELETE FROM public.kt_book_posts\n  WHERE book_id IN (SELECT id FROM public.kt_books WHERE owner_id = target_user_id) OR post_id IN (SELECT id FROM public.kt_posts WHERE user_id = target_user_id);\n  DELETE FROM public.kt_inks\n  WHERE user_id = target_user_id OR post_id IN (SELECT id FROM public.kt_posts WHERE user_id = target_user_id);\n  DELETE FROM public.kt_tickets\n  WHERE user_id = target_user_id OR post_id IN (SELECT id FROM public.kt_posts WHERE user_id = target_user_id);\n  DELETE FROM public.kt_effects\n  WHERE user_id = target_user_id OR post_id IN (SELECT id FROM public.kt_posts WHERE user_id = target_user_id);\n  DELETE FROM public.kt_follows\n  WHERE follower_id = target_user_id OR followed_id = target_user_id;\n  DELETE FROM public.kt_sessions WHERE user_id = target_user_id;\n  DELETE FROM public.kt_password_resets WHERE user_id = target_user_id::text;\n  DELETE FROM public.kt_purchases WHERE user_id = target_user_id;\n  DELETE FROM public.kt_activity WHERE user_id = target_user_id;\n  DELETE FROM public.kt_ticket_inventory WHERE user_id = target_user_id;\n  DELETE FROM public.kt_seal_profiles WHERE user_id = target_user_id;\n  DELETE FROM public.kt_seal_states WHERE user_id = target_user_id;\n  DELETE FROM public.kt_special_wallets WHERE user_id = target_user_id;\n  DELETE FROM public.kt_pets WHERE user_id = target_user_id;\n  DELETE FROM public.kt_books WHERE owner_id = target_user_id;\n  DELETE FROM public.kt_groups WHERE owner_id = target_user_id;\n  DELETE FROM public.kt_posts WHERE user_id = target_user_id;\n  DELETE FROM public.kt_users WHERE id = target_user_id;\nEND $$;\nCOMMIT;`
+function sqlDeleteUser(userId,protectedIds){
+ const user=safeId(userId),admins=protectedAdminArray(protectedIds);
+ return `BEGIN;\nDO $$\nDECLARE\n  target_user_id uuid := '${user}'::uuid;\nBEGIN\n  IF target_user_id = ANY (ARRAY[${admins}]) THEN\n    RAISE EXCEPTION 'Uma conta administrativa protegida não pode ser apagada por este painel.';\n  END IF;\n  IF NOT EXISTS (SELECT 1 FROM public.kt_users WHERE id = target_user_id) THEN\n    RAISE EXCEPTION 'A conta selecionada não existe neste projeto.';\n  END IF;\n  DELETE FROM public.kt_kayepad_delivery_feedback\n  WHERE delivery_id IN (SELECT id FROM public.kt_kayepad_deliveries WHERE sender_id = target_user_id OR recipient_id = target_user_id);\n  DELETE FROM public.kt_kayepad_delivery_notices\n  WHERE user_id = target_user_id OR delivery_id IN (SELECT id FROM public.kt_kayepad_deliveries WHERE sender_id = target_user_id OR recipient_id = target_user_id);\n  DELETE FROM public.kt_kayepad_deliveries\n  WHERE sender_id = target_user_id OR recipient_id = target_user_id;\n  DELETE FROM public.kt_pet_interactions\n  WHERE visitor_id = target_user_id OR pet_id IN (SELECT id FROM public.kt_pets WHERE user_id = target_user_id);\n  DELETE FROM public.kt_group_members\n  WHERE user_id = target_user_id OR group_id IN (SELECT id FROM public.kt_groups WHERE owner_id = target_user_id);\n  DELETE FROM public.kt_group_rules\n  WHERE group_id IN (SELECT id FROM public.kt_groups WHERE owner_id = target_user_id);\n  DELETE FROM public.kt_book_posts\n  WHERE book_id IN (SELECT id FROM public.kt_books WHERE owner_id = target_user_id) OR post_id IN (SELECT id FROM public.kt_posts WHERE user_id = target_user_id);\n  DELETE FROM public.kt_inks\n  WHERE user_id = target_user_id OR post_id IN (SELECT id FROM public.kt_posts WHERE user_id = target_user_id);\n  DELETE FROM public.kt_tickets\n  WHERE user_id = target_user_id OR post_id IN (SELECT id FROM public.kt_posts WHERE user_id = target_user_id);\n  DELETE FROM public.kt_effects\n  WHERE user_id = target_user_id OR post_id IN (SELECT id FROM public.kt_posts WHERE user_id = target_user_id);\n  DELETE FROM public.kt_follows\n  WHERE follower_id = target_user_id OR followed_id = target_user_id;\n  DELETE FROM public.kt_sessions WHERE user_id = target_user_id;\n  DELETE FROM public.kt_password_resets WHERE user_id = target_user_id::text;\n  DELETE FROM public.kt_purchases WHERE user_id = target_user_id;\n  DELETE FROM public.kt_activity WHERE user_id = target_user_id;\n  DELETE FROM public.kt_ticket_inventory WHERE user_id = target_user_id;\n  DELETE FROM public.kt_seal_profiles WHERE user_id = target_user_id;\n  DELETE FROM public.kt_seal_states WHERE user_id = target_user_id;\n  DELETE FROM public.kt_special_wallets WHERE user_id = target_user_id;\n  DELETE FROM public.kt_pets WHERE user_id = target_user_id;\n  DELETE FROM public.kt_books WHERE owner_id = target_user_id;\n  DELETE FROM public.kt_groups WHERE owner_id = target_user_id;\n  DELETE FROM public.kt_posts WHERE user_id = target_user_id;\n  DELETE FROM public.kt_users WHERE id = target_user_id;\nEND $$;\nCOMMIT;`
 }
-function sqlDeletePost(userId,postId){
- const user=safeId(userId),post=safeId(postId);
- return `BEGIN;\nDO $$\nDECLARE\n  target_user_id uuid := '${user}'::uuid;\n  target_post_id uuid := '${post}'::uuid;\nBEGIN\n  IF NOT EXISTS (SELECT 1 FROM public.kt_posts WHERE id = target_post_id AND user_id = target_user_id) THEN\n    RAISE EXCEPTION 'A publicação não pertence à conta selecionada ou não existe.';\n  END IF;\n  DELETE FROM public.kt_book_posts WHERE post_id = target_post_id;\n  DELETE FROM public.kt_inks WHERE post_id = target_post_id;\n  DELETE FROM public.kt_tickets WHERE post_id = target_post_id;\n  DELETE FROM public.kt_effects WHERE post_id = target_post_id;\n  DELETE FROM public.kt_posts WHERE id = target_post_id AND user_id = target_user_id;\nEND $$;\nCOMMIT;`
+function sqlDeletePost(userId,postId,protectedIds){
+ const user=safeId(userId),post=safeId(postId),admins=protectedAdminArray(protectedIds);
+ return `BEGIN;\nDO $$\nDECLARE\n  target_user_id uuid := '${user}'::uuid;\n  target_post_id uuid := '${post}'::uuid;\nBEGIN\n  IF target_user_id = ANY (ARRAY[${admins}]) THEN\n    RAISE EXCEPTION 'Publicações de contas administrativas protegidas não podem ser apagadas por este painel.';\n  END IF;\n  IF NOT EXISTS (SELECT 1 FROM public.kt_posts WHERE id = target_post_id AND user_id = target_user_id) THEN\n    RAISE EXCEPTION 'A publicação não pertence à conta selecionada ou não existe.';\n  END IF;\n  DELETE FROM public.kt_book_posts WHERE post_id = target_post_id;\n  DELETE FROM public.kt_inks WHERE post_id = target_post_id;\n  DELETE FROM public.kt_tickets WHERE post_id = target_post_id;\n  DELETE FROM public.kt_effects WHERE post_id = target_post_id;\n  DELETE FROM public.kt_posts WHERE id = target_post_id AND user_id = target_user_id;\nEND $$;\nCOMMIT;`
 }
-function sqlSetBlocked(userId,adminId,blocked){
- const user=safeId(userId),admin=safeId(adminId);
+function sqlSetBlocked(userId,blocked,protectedIds){
+ const user=safeId(userId),admins=protectedAdminArray(protectedIds);
  const value=blocked?'TRUE':'FALSE';
  const guard=blocked?'A conta foi bloqueada e as sessões atuais foram revogadas.':'A conta foi desbloqueada. A pessoa precisará entrar novamente.';
- return `BEGIN;\nDO $$\nDECLARE\n  target_user_id uuid := '${user}'::uuid;\n  admin_user_id uuid := '${admin}'::uuid;\nBEGIN\n  IF target_user_id = admin_user_id THEN\n    RAISE EXCEPTION 'A conta administrativa protegida não pode ser bloqueada por este painel.';\n  END IF;\n  IF NOT EXISTS (SELECT 1 FROM public.kt_users WHERE id = target_user_id) THEN\n    RAISE EXCEPTION 'A conta selecionada não existe neste projeto.';\n  END IF;\n  UPDATE public.kt_users SET is_blocked = ${value} WHERE id = target_user_id;\n  ${blocked?'UPDATE public.kt_sessions SET revoked = TRUE WHERE user_id = target_user_id;':''}\nEND $$;\nCOMMIT;\nSELECT '${guard}' AS resultado;`
+ return `BEGIN;\nDO $$\nDECLARE\n  target_user_id uuid := '${user}'::uuid;\nBEGIN\n  IF target_user_id = ANY (ARRAY[${admins}]) THEN\n    RAISE EXCEPTION 'Uma conta administrativa protegida não pode ser bloqueada nem desbloqueada por este painel.';\n  END IF;\n  IF NOT EXISTS (SELECT 1 FROM public.kt_users WHERE id = target_user_id) THEN\n    RAISE EXCEPTION 'A conta selecionada não existe neste projeto.';\n  END IF;\n  UPDATE public.kt_users SET is_blocked = ${value} WHERE id = target_user_id;\n  ${blocked?'UPDATE public.kt_sessions SET revoked = TRUE WHERE user_id = target_user_id;':''}\nEND $$;\nCOMMIT;\nSELECT '${guard}' AS resultado;`
 }
 async function loadData(){
  const [userData,postData]=await Promise.all([api('/admin/users'),api('/admin/posts')]);
@@ -143,12 +146,13 @@ postSelect.addEventListener('change',()=>{sqlOutput.value='';updateControls()});
 $('generate-button').addEventListener('click',()=>{
  const user=selectedUser();
  if(!user||!currentUser){setMessage(panelMessage,'Selecione uma conta.','error');return}
- if(user.id===currentUser.id){setMessage(panelMessage,'A conta administrativa está protegida.','error');return}
+ if(isProtectedAdmin(user)){setMessage(panelMessage,'Contas administrativas e suas publicações estão protegidas.','error');return}
  try{
-  if(actionSelect.value==='delete-user')sqlOutput.value=sqlDeleteUser(user.id,currentUser.id);
-  else if(actionSelect.value==='delete-post')sqlOutput.value=sqlDeletePost(user.id,postSelect.value);
-  else if(actionSelect.value==='block')sqlOutput.value=sqlSetBlocked(user.id,currentUser.id,true);
-  else if(actionSelect.value==='unblock')sqlOutput.value=sqlSetBlocked(user.id,currentUser.id,false);
+  const protectedIds=protectedAdminIds();
+  if(actionSelect.value==='delete-user')sqlOutput.value=sqlDeleteUser(user.id,protectedIds);
+  else if(actionSelect.value==='delete-post')sqlOutput.value=sqlDeletePost(user.id,postSelect.value,protectedIds);
+  else if(actionSelect.value==='block')sqlOutput.value=sqlSetBlocked(user.id,true,protectedIds);
+  else if(actionSelect.value==='unblock')sqlOutput.value=sqlSetBlocked(user.id,false,protectedIds);
   setMessage(panelMessage,'SQL gerado. Revise antes de executar no projeto quytz da Supabase.','success');
   updateControls()
  }catch(error){setMessage(panelMessage,error.message||'Não foi possível gerar o SQL.','error')}
@@ -158,7 +162,17 @@ copyButton.addEventListener('click',async()=>{
  try{await navigator.clipboard.writeText(sqlOutput.value);setMessage(panelMessage,'SQL copiado.','success')}
  catch(error){sqlOutput.focus();sqlOutput.select();setMessage(panelMessage,'Código selecionado. Copie-o manualmente.','')}
 });
+const clearSensitiveState=message=>{
+ const oldToken=token;
+ token='';currentUser=null;users=[];posts=[];selectedUserId='';sqlOutput.value='';userRows.replaceChildren();userFilter.value='';renderPosts();
+ panel.hidden=true;loginCard.hidden=false;$('login-form').reset();setMessage(loginMessage,message||'Entre novamente para abrir o painel.');updateControls();
+ return oldToken
+};
 window.addEventListener('pagehide',()=>{
- if(token&&API)fetch(API+'/auth/logout',{method:'POST',headers:{Authorization:'Bearer '+token},keepalive:true}).catch(()=>{})
+ const oldToken=clearSensitiveState('Entre novamente ao abrir o painel.');
+ if(oldToken&&API)fetch(API+'/auth/logout',{method:'POST',headers:{Authorization:'Bearer '+oldToken},keepalive:true}).catch(()=>{})
+});
+window.addEventListener('pageshow',event=>{
+ if(event.persisted)clearSensitiveState('Entre novamente para abrir o painel.')
 });
 })();
