@@ -23,8 +23,6 @@ def admin_users(user=Depends(admin_required)):
             {
                 'id': str(row.id),
                 'username': row.username,
-                'email': row.email,
-                'created_at': row.created_at.isoformat() if row.created_at else None,
                 'is_blocked': bool(row.is_blocked),
                 'is_admin': str(row.id) in allowed_ids,
             }
@@ -43,7 +41,6 @@ def admin_posts(user=Depends(admin_required)):
                     'id': str(post.id),
                     'user_id': str(post.user_id),
                     'username': owner.username if owner else 'conta removida',
-                    'email': owner.email if owner else '',
                     'title': post.title,
                     'created_at': post.created_at.isoformat() if post.created_at else None,
                 }

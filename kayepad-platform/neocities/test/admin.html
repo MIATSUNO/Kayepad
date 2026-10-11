@@ -72,7 +72,7 @@ textarea{min-height:270px;resize:vertical;font:13px/1.55 ui-monospace,SFMono-Reg
 <form id="login-form">
 <label for="email">Email</label>
 <input id="email" name="email" type="email" autocomplete="username" required>
-<label for="password">Senha</label>
+<label for="password">Senha da sua conta administrativa</label>
 <input id="password" name="password" type="password" autocomplete="current-password" required>
 <button class="full" id="login-button" type="submit">Entrar no painel</button>
 </form>
@@ -90,16 +90,17 @@ textarea{min-height:270px;resize:vertical;font:13px/1.55 ui-monospace,SFMono-Reg
 </div>
 </div>
 <p class="notice">Este painel não executa exclusões. Revise o código gerado e rode-o somente no projeto correto do Supabase. A conta oficial protegida não pode ser selecionada para exclusão ou bloqueio. Livros enviados podem conter cópias do texto salvas como snapshots nas entregas; esses trechos não são removidos automaticamente ao excluir uma conta ou publicação.</p>
+<p class="notice">A lista mostra somente nomes de usuário, status e títulos/datas das publicações. Ela não mostra emails de usuários, senhas nem o texto das publicações.</p>
 <p class="message" id="panel-message" role="status" aria-live="polite"></p>
 <div class="grid">
 <section class="card">
 <h2>Usuários</h2>
-<label for="user-filter">Filtrar por nome ou email</label>
+<label for="user-filter">Filtrar por nome de usuário</label>
 <input id="user-filter" type="search" autocomplete="off" placeholder="Digite para filtrar">
 <div class="table-wrap">
 <table>
-<thead><tr><th>Conta</th><th>Email</th><th>Cadastro</th><th>Acesso</th></tr></thead>
-<tbody id="user-rows"><tr><td class="empty" colspan="4">Carregando…</td></tr></tbody>
+<thead><tr><th>Conta</th><th>Acesso</th></tr></thead>
+<tbody id="user-rows"><tr><td class="empty" colspan="2">Carregando…</td></tr></tbody>
 </table>
 </div>
 <p class="detail" id="selected-user"></p>
@@ -129,6 +130,6 @@ textarea{min-height:270px;resize:vertical;font:13px/1.55 ui-monospace,SFMono-Reg
 </section>
 </main>
 <script src="config.js"></script>
-<script src="admin.js"></script>
+<script src="admin.js?v=20261011-minimal-data"></script>
 </body>
 </html>
