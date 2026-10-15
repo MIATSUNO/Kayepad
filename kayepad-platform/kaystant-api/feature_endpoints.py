@@ -1,5 +1,6 @@
 import json
-from app import SQLModel, DBField, UUID, uuid4, datetime, timedelta, UTC, BaseModel, Field, app, Session, engine, select, KUser, KPost, KSession, KInk, KPurchase, KGroup, KGroupMember, KPet, KBook, KBookPost, KPetTouch, post_json, user_json, me, Depends, HTTPException
+from pydantic import field_validator
+from app import SQLModel, DBField, UUID, uuid4, datetime, timedelta, UTC, BaseModel, Field, app, Session, engine, select, KUser, KPost, KSession, KInk, KPurchase, KGroup, KGroupMember, KPet, KBook, KBookPost, KPetTouch, post_json, user_json, me, Depends, HTTPException, is_safe_http_url
 
 # Social graph and editable profiles
 class KFollow(SQLModel, table=True):
@@ -20,6 +21,23 @@ class ProfileEdit(BaseModel):
  theme:str|None=None
  instagram_handle:str|None=Field(default=None,max_length=40,pattern=r'^$|^@?[A-Za-z0-9_.]{1,39}$')
  avatar:dict|None=None
+
+ @field_validator('links')
+ @classmethod
+ def validate_links(cls,value):
+  if value is None: return value
+  clean=[]
+  for item in value:
+   link=item.strip()
+   if not link or len(link)>500 or not is_safe_http_url(link): raise ValueError('Os links precisam usar http ou https e ter um endereço válido')
+   clean.append(link)
+  return clean
+
+ @field_validator('banner_url')
+ @classmethod
+ def validate_banner_url(cls,value):
+  if value is not None and not is_safe_http_url(value): raise ValueError('Use um endereço http ou https válido')
+  return value
 
 @app.get('/users/{username}')
 def public_profile(username:str):

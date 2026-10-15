@@ -3,7 +3,8 @@ from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid4
 from fastapi import FastAPI, Depends, HTTPException, Header, Request
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+from urllib.parse import urlsplit
 from sqlmodel import SQLModel, Field as DBField, Session, create_engine, select
 from sqlalchemy import text
 import bcrypt
@@ -13,10 +14,24 @@ DATABASE_URL=os.getenv('DATABASE_URL','sqlite:///./kaystant.db')
 if DATABASE_URL.startswith('postgres://'): DATABASE_URL='postgresql+psycopg://'+DATABASE_URL[11:]
 elif DATABASE_URL.startswith('postgresql://'): DATABASE_URL='postgresql+psycopg://'+DATABASE_URL[13:]
 sqlite=DATABASE_URL.startswith('sqlite'); engine=create_engine(DATABASE_URL,pool_pre_ping=True,connect_args={'check_same_thread':False} if sqlite else {'prepare_threshold':None})
-SECRET=os.getenv('JWT_SECRET','kaystant-dev-only-change-me')
 app=FastAPI(title='Kaystant API',version='0.1.0')
-origins=[x.strip() for x in os.getenv('CORS_ORIGINS','https://kayepad.neocities.org,http://localhost:3000').split(',') if x.strip()]
+origins=[x.strip() for x in os.getenv('CORS_ORIGINS','https://kayepad.neocities.org').split(',') if x.strip()]
 app.add_middleware(CORSMiddleware,allow_origins=origins,allow_methods=['GET','POST','PATCH','DELETE','OPTIONS'],allow_headers=['Authorization','Content-Type'])
+
+@app.middleware('http')
+async def security_headers(request: Request, call_next):
+ response=await call_next(request)
+ response.headers['X-Content-Type-Options']='nosniff'
+ response.headers['X-Frame-Options']='DENY'
+ response.headers['Referrer-Policy']='strict-origin-when-cross-origin'
+ response.headers['Permissions-Policy']='camera=(), microphone=(), geolocation=()'
+ response.headers['Strict-Transport-Security']='max-age=31536000'
+ if request.url.path.startswith(('/admin/','/auth/')):
+  response.headers['Cache-Control']='no-store, max-age=0'
+  response.headers['Pragma']='no-cache'
+ if request.url.path.startswith('/admin/'):
+  response.headers['Content-Security-Policy']="default-src 'none'; frame-ancestors 'none'; base-uri 'none'"
+ return response
 
 class KUser(SQLModel,table=True):
  __tablename__='kt_users'; id:UUID=DBField(default_factory=uuid4,primary_key=True); email:str=DBField(unique=True,index=True); username:str=DBField(unique=True,index=True); password_hash:str; bio:str=''; ink_color:str='#5367d8'; coins:int=0; ink:int=18; badge:str='normal'; banner_url:str=''; display_name:str=''; show_display_name:bool=True; links_json:str='[]'; theme:str='paper'; avatar_json:str='{}'; instagram_handle:str=''; username_changed_at:datetime|None=None; verified:bool=False; is_blocked:bool=False; created_at:datetime=DBField(default_factory=lambda:datetime.now(UTC))
@@ -37,7 +52,26 @@ def allowed_email(email):
  return email.lower().rsplit('@',1)[-1] in ALLOWED_EMAIL_DOMAINS
 class Login(BaseModel): email:str; password:str
 class PostIn(BaseModel): title:str=Field(min_length=1,max_length=140); category:str; body:str=Field(min_length=1,max_length=30000); full_name:str=Field(default='',max_length=120); article_date:str=Field(default='',max_length=30); article_location:str=Field(default='',max_length=160); data_used:str=Field(default='',max_length=1000); rights:str=Field(default='',max_length=80); sources:str=Field(default='',max_length=3000)
-class ProfileIn(BaseModel): bio:str|None=None; ink_color:str|None=None; banner_url:str|None=None
+def is_safe_http_url(value):
+ if not value:
+  return True
+ if any(ord(char)<32 for char in value):
+  return False
+ try:
+  parsed=urlsplit(value.strip())
+  return parsed.scheme.lower() in {'http','https'} and bool(parsed.hostname) and parsed.username is None and parsed.password is None
+ except ValueError:
+  return False
+
+class ProfileIn(BaseModel):
+ bio:str|None=Field(default=None,max_length=280,pattern=r'^[^<>]*$')
+ ink_color:str|None=Field(default=None,pattern=r'^#[0-9a-fA-F]{6}$')
+ banner_url:str|None=Field(default=None,max_length=500)
+ @field_validator('banner_url')
+ @classmethod
+ def validate_banner_url(cls,value):
+  if value is not None and not is_safe_http_url(value): raise ValueError('Use um endereço http ou https válido')
+  return value
 class InkIn(BaseModel): amount:int=Field(default=1,ge=1,le=10)
 
 @app.on_event('startup')
