@@ -29,7 +29,7 @@ class ProfileEdit(BaseModel):
   clean=[]
   for item in value:
    link=item.strip()
-   if len(link)>500 or not is_safe_http_url(link): raise ValueError('Os links precisam usar http ou https e ter um endereço válido')
+   if not link or len(link)>500 or not is_safe_http_url(link): raise ValueError('Os links precisam usar http ou https e ter um endereço válido')
    clean.append(link)
   return clean
 

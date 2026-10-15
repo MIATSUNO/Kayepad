@@ -50,11 +50,16 @@ def reset_password(d: ResetIn):
             expires_at = expires_at.replace(tzinfo=timezone.utc)
         if not row or row['used'] or expires_at < datetime.now(timezone.utc):
             raise HTTPException(400, 'Código de recuperação inválido ou expirado')
+        claimed = session.execute(
+            text('UPDATE kt_password_resets SET used=TRUE WHERE id=:id AND used=FALSE'),
+            {'id': row['id']},
+        )
+        if claimed.rowcount != 1:
+            raise HTTPException(400, 'Código de recuperação inválido ou expirado')
         user = session.get(KUser, UUID(str(row['user_id'])))
         if not user:
             raise HTTPException(400, 'Código de recuperação inválido ou expirado')
         user.password_hash = pw(d.password)
-        session.execute(text('UPDATE kt_password_resets SET used=TRUE WHERE id=:id'), {'id': row['id']})
         session.execute(update(KSession).where(KSession.user_id == user.id).values(revoked=True))
         session.commit()
     return {'reset': True}

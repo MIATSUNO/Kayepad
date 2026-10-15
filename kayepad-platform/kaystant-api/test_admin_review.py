@@ -80,6 +80,13 @@ with TestClient(app) as client:
             assert result.json()['remaining'] == 2-index
     admin_token = result.json()['admin_token']
 
+    failed_start = client.post('/admin/step-up/start', headers={'Authorization': f'Bearer {admin_one_token}'})
+    assert failed_start.status_code == 200
+    failed_challenge = failed_start.json()['challenge']
+    for attempt in range(5):
+        failed_answer = client.post('/admin/step-up/answer', headers={'Authorization': f'Bearer {admin_one_token}'}, json={'challenge': failed_challenge, 'answer': f'wrong-{attempt}'})
+    assert failed_answer.status_code == 429
+
     authorized = client.get('/admin/users', headers={'Authorization': f'Bearer {admin_token}'})
     assert authorized.status_code == 200
     rows = {row['id']: row for row in authorized.json()}
@@ -125,6 +132,8 @@ with TestClient(app) as client:
     os.environ['KAYSTANT_VERIFIED_RESET_FLOW'] = 'true'
     reset = client.post('/auth/reset-password', json={'token': reset_token, 'password': 'NewSafePassword123!'})
     assert reset.status_code == 200, reset.text
+    replayed_reset = client.post('/auth/reset-password', json={'token': reset_token, 'password': 'AnotherSafePassword123!'})
+    assert replayed_reset.status_code == 400
     revoked_session = client.get('/me', headers={'Authorization': f'Bearer {user_token}'})
     assert revoked_session.status_code == 401, (revoked_session.status_code, revoked_session.text)
     os.environ.pop('KAYSTANT_VERIFIED_RESET_FLOW', None)

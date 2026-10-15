@@ -150,7 +150,7 @@ def admin_step_up_answer(data: AdminAnswerIn, authorization: str | None = Header
             KAdminChallenge.user_id == user.id,
             KAdminChallenge.primary_session_hash == primary_hash,
             KAdminChallenge.consumed == False,
-        )).first()
+        ).with_for_update()).first()
         if not challenge or _utc(challenge.expires_at) <= now:
             raise HTTPException(401, 'Verificação expirada. Entre novamente.')
         if challenge.attempts >= 5:
