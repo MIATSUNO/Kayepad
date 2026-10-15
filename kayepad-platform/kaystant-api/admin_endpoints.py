@@ -1,4 +1,5 @@
 import os
+import json
 import hashlib
 import hmac
 import secrets
@@ -68,29 +69,35 @@ def _bearer_hash(authorization):
     return hashlib.sha256(authorization[7:].encode()).hexdigest()
 
 
+def _factor_hashes():
+    try:
+        values = json.loads(os.getenv('KAYSTANT_ADMIN_FACTOR_HASHES', '{}'))
+        return values if isinstance(values, dict) else {}
+    except (TypeError, json.JSONDecodeError):
+        return {}
+
+
 def _mfa_hashes_configured():
-    return all(os.getenv(name, '').strip() for name in (
-        'KAYSTANT_ADMIN_STEP2_BCRYPT_HASH',
-        'KAYSTANT_ADMIN_STEP3_SCRYPT_HASH',
-        'KAYSTANT_ADMIN_STEP4_PBKDF2_HASH',
-    ))
+    hashes = _factor_hashes()
+    return all(str(hashes.get(str(step), '')).strip() for step in (2, 3, 4))
 
 
 def _verify_answer(step, answer):
     raw = answer.strip().encode('utf-8')
+    hashes = _factor_hashes()
     try:
         if step == 2:
-            encoded = os.getenv('KAYSTANT_ADMIN_STEP2_BCRYPT_HASH', '').encode()
+            encoded = str(hashes.get('2', '')).encode()
             return bool(encoded) and bcrypt.checkpw(raw, encoded)
         if step == 3:
-            parts = os.getenv('KAYSTANT_ADMIN_STEP3_SCRYPT_HASH', '').split('$')
+            parts = str(hashes.get('3', '')).split('$')
             if len(parts) != 6 or parts[0] != 'scrypt':
                 return False
             _, n_text, r_text, p_text, salt_hex, digest_hex = parts
             digest = hashlib.scrypt(raw, salt=bytes.fromhex(salt_hex), n=int(n_text), r=int(r_text), p=int(p_text), dklen=len(bytes.fromhex(digest_hex)))
             return hmac.compare_digest(digest.hex(), digest_hex)
         if step == 4:
-            parts = os.getenv('KAYSTANT_ADMIN_STEP4_PBKDF2_HASH', '').split('$')
+            parts = str(hashes.get('4', '')).split('$')
             if len(parts) != 4 or parts[0] != 'pbkdf2-sha256':
                 return False
             _, iterations_text, salt_hex, digest_hex = parts

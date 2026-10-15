@@ -1,4 +1,5 @@
 import hashlib
+import json
 import os
 import secrets
 import uuid
@@ -10,9 +11,7 @@ from sqlmodel import Session, select
 
 os.environ['DATABASE_URL'] = f'sqlite:///./admin-review-{uuid.uuid4().hex}.db'
 os.environ['KAYSTANT_ADMIN_USER_IDS'] = ''
-os.environ.pop('KAYSTANT_ADMIN_STEP2_BCRYPT_HASH', None)
-os.environ.pop('KAYSTANT_ADMIN_STEP3_SCRYPT_HASH', None)
-os.environ.pop('KAYSTANT_ADMIN_STEP4_PBKDF2_HASH', None)
+os.environ.pop('KAYSTANT_ADMIN_FACTOR_HASHES', None)
 os.environ.pop('KAYSTANT_VERIFIED_RESET_FLOW', None)
 
 from fastapi.testclient import TestClient
@@ -33,13 +32,14 @@ def signup(client, email, username):
 
 def configure_test_factors():
     answers = ['ReviewFactorTwo', 'ReviewFactorThree', 'ReviewFactorFour']
-    os.environ['KAYSTANT_ADMIN_STEP2_BCRYPT_HASH'] = bcrypt.hashpw(answers[0].encode(), bcrypt.gensalt()).decode()
+    factors = {'2': bcrypt.hashpw(answers[0].encode(), bcrypt.gensalt()).decode()}
     salt = secrets.token_bytes(16)
     digest = hashlib.scrypt(answers[1].encode(), salt=salt, n=16384, r=8, p=1, dklen=32)
-    os.environ['KAYSTANT_ADMIN_STEP3_SCRYPT_HASH'] = f'scrypt$16384$8$1${salt.hex()}${digest.hex()}'
+    factors['3'] = f'scrypt$16384$8$1${salt.hex()}${digest.hex()}'
     salt = secrets.token_bytes(16)
     digest = hashlib.pbkdf2_hmac('sha256', answers[2].encode(), salt, 100000, dklen=32)
-    os.environ['KAYSTANT_ADMIN_STEP4_PBKDF2_HASH'] = f'pbkdf2-sha256$100000${salt.hex()}${digest.hex()}'
+    factors['4'] = f'pbkdf2-sha256$100000${salt.hex()}${digest.hex()}'
+    os.environ['KAYSTANT_ADMIN_FACTOR_HASHES'] = json.dumps(factors)
     return answers
 
 
