@@ -84,11 +84,10 @@ def owner_reset_once(data: OwnerResetIn, x_reset_token: str | None = Header(None
     email = data.email.strip().lower()
     if email != 'kayepad.bird@gmail.com':
         raise HTTPException(404, 'Not found')
-    allowed_ids = {value.strip() for value in os.getenv('KAYSTANT_ADMIN_USER_IDS', '').split(',') if value.strip()}
     now = datetime.now(timezone.utc)
     with Session(engine) as session:
         user = session.exec(select(KUser).where(KUser.email == email)).first()
-        if not user or str(user.id) not in allowed_ids:
+        if not user:
             raise HTTPException(404, 'Not found')
         existing = session.execute(
             text('SELECT id FROM kt_password_resets WHERE token_hash=:token_hash'),
