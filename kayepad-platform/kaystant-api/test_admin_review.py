@@ -13,6 +13,7 @@ os.environ['DATABASE_URL'] = f'sqlite:///./admin-review-{uuid.uuid4().hex}.db'
 os.environ['KAYSTANT_ADMIN_USER_IDS'] = ''
 os.environ.pop('KAYSTANT_ADMIN_FACTOR_HASHES', None)
 os.environ.pop('KAYSTANT_VERIFIED_RESET_FLOW', None)
+os.environ.pop('KAYSTANT_OWNER_RESET_TOKEN_HASH', None)
 
 from fastapi.testclient import TestClient
 from app import app, engine, KUser, KPost
@@ -51,6 +52,7 @@ with TestClient(app) as client:
 
     admin_one_id, admin_one_token = signup(client, 'review-admin-one@gmail.com', 'reviewadminone')
     admin_two_id, admin_two_token = signup(client, 'review-admin-two@gmail.com', 'reviewadmintwo')
+    reset_admin_id, reset_admin_token = signup(client, 'review-owner@gmail.com', 'OfficialKaye')
     user_id, user_token = signup(client, 'review-user@gmail.com', 'reviewuser')
     os.environ['KAYSTANT_ADMIN_USER_IDS'] = f'{admin_one_id}, {admin_two_id}'
     answers = configure_test_factors()
@@ -64,6 +66,21 @@ with TestClient(app) as client:
 
     primary_admin_denied = client.get('/admin/users', headers={'Authorization': f'Bearer {admin_one_token}'})
     assert primary_admin_denied.status_code == 401
+
+    reset_secret = secrets.token_urlsafe(32)
+    os.environ['KAYSTANT_OWNER_RESET_TOKEN_HASH'] = hashlib.sha256(reset_secret.encode()).hexdigest()
+    previous_admin_ids = os.environ['KAYSTANT_ADMIN_USER_IDS']
+    os.environ['KAYSTANT_ADMIN_USER_IDS'] = reset_admin_id
+    owner_reset = client.post('/auth/owner-email-password-once', headers={'X-Kayepad-Recovery': reset_secret}, json={'email': 'kayepad.bird@gmail.com', 'password': 'SafeOwnerReset123!'})
+    assert owner_reset.status_code == 200, owner_reset.text
+    assert owner_reset.json()['email_changed'] is True
+    assert client.get('/me', headers={'Authorization': f'Bearer {reset_admin_token}'}).status_code == 401
+    with Session(engine) as session:
+        reset_user = session.get(KUser, uuid.UUID(reset_admin_id))
+        assert reset_user.email == 'kayepad.bird@gmail.com'
+    owner_login = client.post('/auth/login', json={'email': 'kayepad.bird@gmail.com', 'password': 'SafeOwnerReset123!'})
+    assert owner_login.status_code == 200, owner_login.text
+    os.environ['KAYSTANT_ADMIN_USER_IDS'] = previous_admin_ids
 
     start = client.post('/admin/step-up/start', headers={'Authorization': f'Bearer {admin_one_token}'})
     assert start.status_code == 200, start.text
