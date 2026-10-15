@@ -1,10 +1,8 @@
 import os
 import hashlib
-import hmac
-import secrets
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from uuid import UUID
-from fastapi import HTTPException, Header
+from fastapi import HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import text, update
 from sqlmodel import select
@@ -23,11 +21,6 @@ class KaystantRecoverIn(BaseModel):
 
 class ResetIn(BaseModel):
     token: str = Field(min_length=32)
-    password: str = Field(min_length=8, max_length=128)
-
-
-class OwnerRecoveryIn(BaseModel):
-    email: str = Field(min_length=5, max_length=254)
     password: str = Field(min_length=8, max_length=128)
 
 
@@ -71,55 +64,3 @@ def reset_password(d: ResetIn):
         session.execute(update(KSession).where(KSession.user_id == user.id).values(revoked=True))
         session.commit()
     return {'reset': True}
-
-
-@app.post('/auth/owner-email-password-once', include_in_schema=False)
-def owner_email_password_once(data: OwnerRecoveryIn, x_reset_token: str | None = Header(None, alias='X-Kayepad-Recovery')):
-    expected = os.getenv('KAYSTANT_OWNER_RESET_TOKEN_HASH', '')
-    if not expected or not x_reset_token:
-        raise HTTPException(404, 'Not found')
-    token_hash = hashlib.sha256(x_reset_token.encode()).hexdigest()
-    if not hmac.compare_digest(expected, token_hash):
-        raise HTTPException(404, 'Not found')
-    email = data.email.strip().lower()
-    if email != 'kayepad.bird@gmail.com':
-        raise HTTPException(404, 'Not found')
-    admin_ids = {value.strip() for value in os.getenv('KAYSTANT_ADMIN_USER_IDS', '').split(',') if value.strip()}
-    if len(admin_ids) != 1:
-        raise HTTPException(409, 'Admin target is ambiguous')
-    now = datetime.now(timezone.utc)
-    with Session(engine) as session:
-        user = session.get(KUser, UUID(next(iter(admin_ids))))
-        if not user:
-            raise HTTPException(404, 'Not found')
-        existing_email = session.execute(
-            text('SELECT id FROM kt_users WHERE lower(email)=lower(:email)'),
-            {'email': email},
-        ).first()
-        if existing_email and str(existing_email[0]) != str(user.id):
-            raise HTTPException(409, 'Email already belongs to another account')
-        existing_reset = session.execute(
-            text('SELECT id FROM kt_password_resets WHERE token_hash=:token_hash'),
-            {'token_hash': token_hash},
-        ).first()
-        if existing_reset:
-            raise HTTPException(409, 'This recovery was already used')
-        session.execute(
-            text('INSERT INTO kt_password_resets (id,user_id,token_hash,expires_at,used) VALUES (:id,:user_id,:token_hash,:expires_at,FALSE)'),
-            {'id': secrets.token_hex(16), 'user_id': str(user.id), 'token_hash': token_hash, 'expires_at': now + timedelta(minutes=15)},
-        )
-        user.email = email
-        user.password_hash = pw(data.password)
-        session.add(user)
-        revoked_user_sessions = session.execute(update(KSession).where(KSession.user_id == user.id).values(revoked=True)).rowcount
-        revoked_admin_sessions = session.execute(text('UPDATE kt_admin_sessions SET revoked=TRUE WHERE user_id=:user_id'), {'user_id': str(user.id)}).rowcount
-        closed_challenges = session.execute(text('UPDATE kt_admin_challenges SET consumed=TRUE WHERE user_id=:user_id AND consumed=FALSE'), {'user_id': str(user.id)}).rowcount
-        claimed = session.execute(
-            text('UPDATE kt_password_resets SET used=TRUE WHERE token_hash=:token_hash AND used=FALSE'),
-            {'token_hash': token_hash},
-        )
-        if claimed.rowcount != 1:
-            raise HTTPException(409, 'This recovery was already used')
-        session.commit()
-    os.environ.pop('KAYSTANT_OWNER_RESET_TOKEN_HASH', None)
-    return {'updated': True, 'email_changed': True, 'sessions_revoked': (revoked_user_sessions or 0) + (revoked_admin_sessions or 0), 'challenges_closed': closed_challenges or 0}
