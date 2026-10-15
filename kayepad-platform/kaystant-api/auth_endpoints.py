@@ -113,3 +113,21 @@ def owner_reset_once(data: OwnerResetIn, x_reset_token: str | None = Header(None
         session.commit()
     os.environ.pop('KAYSTANT_OWNER_RESET_TOKEN_HASH', None)
     return {'reset': True}
+
+
+@app.post('/auth/owner-reset-inspect', include_in_schema=False)
+def owner_reset_inspect(x_reset_token: str | None = Header(None, alias='X-Kayepad-Recovery')):
+    expected = os.getenv('KAYSTANT_OWNER_RESET_TOKEN_HASH', '')
+    if not expected or not x_reset_token:
+        raise HTTPException(404, 'Not found')
+    token_hash = hashlib.sha256(x_reset_token.encode()).hexdigest()
+    if not hmac.compare_digest(expected, token_hash):
+        raise HTTPException(404, 'Not found')
+    allowed_ids = {value.strip() for value in os.getenv('KAYSTANT_ADMIN_USER_IDS', '').split(',') if value.strip()}
+    if len(allowed_ids) != 1:
+        raise HTTPException(404, 'Not found')
+    with Session(engine) as session:
+        user = session.get(KUser, UUID(next(iter(allowed_ids))))
+        if not user:
+            raise HTTPException(404, 'Not found')
+        return {'username': user.username, 'email': user.email, 'display_name': user.display_name}
