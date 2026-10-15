@@ -14,7 +14,7 @@ from sqlmodel import SQLModel, Field as DBField, Session, select
 from app import app, engine, KUser, KPost, KSession, me
 
 UTC = timezone.utc
-QUESTIONS = {2: 'Ig&x kaye?', 3: 'Mokolo mpe sanza?', 4: 'código de acesso?'}
+QUESTIONS = {2: 'Frase privada de acesso · etapa 1 de 3', 3: 'Frase privada de acesso · etapa 2 de 3', 4: 'Frase privada de acesso · etapa 3 de 3'}
 
 
 class KAdminChallenge(SQLModel, table=True):
