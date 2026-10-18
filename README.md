@@ -6,9 +6,11 @@ A Kayepad é um espaço para escrever do seu jeito: criar, revisar, montar capas
 
 ## Para baixar
 
-O aplicativo Android disponível neste repositório é o **Kayepad for Writers 1.1.0**:
+O aplicativo Android mais recente neste repositório é o **Kayepad for Writers 1.2.0**.
 
-[Baixar o APK](app-downloads/v1.1.0/Kayepad-for-Writers-1.1.0.apk)
+[Baixar o APK 1.2.0](app-downloads/v1.2.0/Kayepad-for-Writers-1.2.0.apk)
+
+Versões anteriores: [1.1.0](app-downloads/v1.1.0/Kayepad-for-Writers-1.1.0.apk).
 
 ## Informações públicas
 
