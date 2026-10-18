@@ -6,21 +6,24 @@ A Kayepad é um espaço para escrever do seu jeito: criar, revisar, montar capas
 
 ## Para baixar
 
-**Versão atual: Kayepad for Writers 1.3.0**
+**Versão atual: Kayepad for Writers 1.3.1**
 
-[Baixar o APK 1.3.0](app-downloads/v1.3.0/Kayepad-for-Writers-1.3.0.apk)
+[Baixar o APK 1.3.1](app-downloads/v1.3.1/Kayepad-for-Writers-1.3.1.apk)
 
-A versão 1.3.0 traz bloqueio local por PIN, código, emoji ou padrão, além dos widgets Nota e Veristante.
+A versão 1.3.1 corrige a atualização visual do widget Nota e amplia a sincronização de notas para que obras mais antigas escolhidas no widget tenham mais chance de aparecer. O widget Veristante agora apresenta uma lista rolável com capas, dados das obras e links de leitura, usando o catálogo público completo.
+
+**Importante sobre instalação e assinatura:** o APK 1.3.1 foi assinado com uma chave de teste diferente da versão 1.3.0, e essa chave temporária não foi preservada. Portanto, não é possível instalar a 1.3.1 por cima da 1.3.0. Antes de desinstalar a versão antiga, exporte suas notas em JSON e salve uma cópia fora do app. Depois desinstale a versão anterior e instale a 1.3.1; desinstalar pode apagar os dados locais. A assinatura de teste da 1.3.1 também não foi preservada para lançamentos futuros, então uma atualização posterior poderá exigir novamente backup e reinstalação limpa.
+
+O APK tem 903.755 bytes (883 KB) e SHA-256 `c2f5b100b7a801dbdc338b2835b1270069bff03f531a11dfbd1cdb01e2371f95`. A compilação e as verificações estáticas passaram, mas não foi feito teste em dispositivo ou emulador.
 
 ### Versões anteriores
 
+- [Kayepad for Writers 1.3.0](app-downloads/v1.3.0/Kayepad-for-Writers-1.3.0.apk)
 - [Kayepad for Writers 1.2.1](app-downloads/v1.2.1/Kayepad-for-Writers-1.2.1.apk)
 - [Kayepad for Writers 1.2.0](app-downloads/v1.2.0/Kayepad-for-Writers-1.2.0.apk)
 - [Kayepad for Writers 1.1.0](app-downloads/v1.1.0/Kayepad-for-Writers-1.1.0.apk)
 
-Os APKs são builds de teste assinados fora da Play Store. A assinatura da 1.3.0 é diferente da 1.2.1, então o Android não permite instalar por cima. Exporte suas notas em JSON, confira e guarde uma cópia fora do app antes de desinstalar a versão anterior; a desinstalação pode apagar os dados locais. A chave usada na assinatura de teste da 1.3.0 não foi preservada, então atualizações futuras podem exigir uma nova instalação.
-
-A página do aplicativo também mantém o histórico e os links: https://kayepad.neocities.org/site/app/tappstall/kayepad
+Os APKs são builds de teste assinados fora da Play Store. A página do aplicativo também mantém o histórico e os links: https://kayepad.neocities.org/site/app/tappstall/kayepad
 
 ## Informações públicas
 
