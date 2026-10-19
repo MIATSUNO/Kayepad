@@ -6,18 +6,19 @@ A Kayepad é um espaço para escrever do seu jeito: criar, revisar, montar capas
 
 ## Para baixar
 
-**Versão atual: Kayepad for Writers 1.3.1**
+**Versão atual: Kayepad for Writers 1.3.2** · **Recomendado**
 
-[Baixar o APK 1.3.1](app-downloads/v1.3.1/Kayepad-for-Writers-1.3.1.apk)
+[Baixar o APK 1.3.2](app-downloads/v1.3.2/Kayepad-for-Writers-1.3.2.apk)
 
-A versão 1.3.1 corrige a atualização visual do widget Nota e amplia a sincronização de notas para que obras mais antigas escolhidas no widget tenham mais chance de aparecer. O widget Veristante agora apresenta uma lista rolável com capas, dados das obras e links de leitura, usando o catálogo público completo.
+A versão 1.3.2 corrige a exportação de PDF para gerar um documento com título, capítulos e texto da obra, em vez de capturas da tela. No Perfil, permite ativar uma marca visual com o nome de usuário. Também inclui o widget Acompanhar obras e mantém os widgets Nota e Veristante.
 
-**Importante sobre instalação e assinatura:** o APK 1.3.1 foi assinado com uma chave de teste diferente da versão 1.3.0, e essa chave temporária não foi preservada. Portanto, não é possível instalar a 1.3.1 por cima da 1.3.0. Antes de desinstalar a versão antiga, exporte suas notas em JSON e salve uma cópia fora do app. Depois desinstale a versão anterior e instale a 1.3.1; desinstalar pode apagar os dados locais. A assinatura de teste da 1.3.1 também não foi preservada para lançamentos futuros, então uma atualização posterior poderá exigir novamente backup e reinstalação limpa.
+**Instalação e assinatura:** este APK é um build de teste assinado, não uma versão verificada pela Play Store. A assinatura de teste da 1.3.2 é diferente das versões anteriores, então não instala por cima de uma instalação antiga. Antes de desinstalar, exporte as notas em JSON e guarde uma cópia fora do app; a desinstalação pode apagar os dados locais.
 
-O APK tem 903.755 bytes (883 KB) e SHA-256 `c2f5b100b7a801dbdc338b2835b1270069bff03f531a11dfbd1cdb01e2371f95`. A compilação e as verificações estáticas passaram, mas não foi feito teste em dispositivo ou emulador.
+O APK tem 1.047.864 bytes (1,00 MiB) e SHA-256 `02eb035b145ad60932b453ae46dbd7413f5361fd05a352650270256d9e7f97aa`. A compilação e as verificações estáticas passaram, mas não foi feito teste de instalação em aparelho ou emulador.
 
 ### Versões anteriores
 
+- [Kayepad for Writers 1.3.1](app-downloads/v1.3.1/Kayepad-for-Writers-1.3.1.apk)
 - [Kayepad for Writers 1.3.0](app-downloads/v1.3.0/Kayepad-for-Writers-1.3.0.apk)
 - [Kayepad for Writers 1.2.1](app-downloads/v1.2.1/Kayepad-for-Writers-1.2.1.apk)
 - [Kayepad for Writers 1.2.0](app-downloads/v1.2.0/Kayepad-for-Writers-1.2.0.apk)
