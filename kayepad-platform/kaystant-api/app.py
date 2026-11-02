@@ -192,16 +192,7 @@ def redeem(post_id:UUID,u=Depends(me)):
   amount=25;p.ink_total-=p.ink_goal;p.coins_awarded=amount;p.redeemed_at=datetime.now(UTC);x=s.get(KUser,u.id);x.coins+=amount;s.commit();return {'coins':amount,'remaining_ink':p.ink_total,'ink_goal':p.ink_goal,'post':post_json(s,p),'user':user_json(x)}
 @app.post('/shop/{item}')
 def shop(item:str,u=Depends(me)):
- costs={'selo':1200,'regua':1000,'caneta':2900}
- if item not in costs: raise HTTPException(404,'Item não encontrado')
- with Session(engine) as s:
-  x=s.get(KUser,u.id)
-  if s.exec(select(KPurchase).where(KPurchase.user_id==x.id,KPurchase.item==item)).first(): raise HTTPException(409,'Você já possui este recurso')
-  if x.coins<costs[item]: raise HTTPException(400,'Coins insuficientes')
-  x.coins-=costs[item];s.add(KPurchase(user_id=x.id,item=item,cost=costs[item]))
-  if item=='selo': x.badge='selo'
-  if item=='caneta': x.badge='verificado';x.verified=True
-  s.commit();return {'item':item,'user':user_json(x)}
+ raise HTTPException(410,'Esta loja foi substituída pela Ke-Store')
 
 class KGroup(SQLModel, table=True):
  __tablename__='kt_groups'; id:UUID=DBField(default_factory=uuid4,primary_key=True); owner_id:UUID=DBField(index=True); name:str; hashtag:str=DBField(unique=True); rules:str=''; image_url:str=''; created_at:datetime=DBField(default_factory=lambda:datetime.now(UTC))

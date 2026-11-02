@@ -1,5 +1,7 @@
 import json
 from pydantic import field_validator
+from sqlalchemy import select as sa_select
+from sqlalchemy.exc import IntegrityError
 from app import SQLModel, DBField, UUID, uuid4, datetime, timedelta, UTC, BaseModel, Field, app, Session, engine, select, KUser, KPost, KSession, KInk, KPurchase, KGroup, KGroupMember, KPet, KBook, KBookPost, KPetTouch, post_json, user_json, me, Depends, HTTPException, is_safe_http_url
 
 # Social graph and editable profiles
@@ -147,7 +149,7 @@ def ke_wallet(s,u):
 
 @app.get('/ke-store/catalog')
 def ke_catalog():
- return {'normal':[{'id':'selo','name':'Selo','price':2800,'permanent':True},{'id':'ticket','name':'Ticket','price':600,'permanent':False}],'special':[{'id':'magica','name':'Tinta Mágica','price':5,'days':7},{'id':'autor','name':'Etiqueta de Autor','price':10,'days':30},{'id':'marcador','name':'Marcador de Página','price':3,'days':1},{'id':'broche','name':'Broche Kayepad','price':8,'days':30},{'id':'vela','name':'Vela Nota','price':5,'days':7},{'id':'exlibris','name':'Ex-Libris','price':10,'days':14}]}
+ return {'normal':[{'id':'selo','name':'Selo','price':2800,'days':30},{'id':'ticket','name':'Ticket','price':600},{'id':'ink','name':'Cargas de Tinta','price':100,'quantity':50}],'special':[{'id':'cambio','name':'Câmbio','price':60,'days':7},{'id':'exlibris','name':'Ex-Libris','price':120,'days':7}]}
 @app.get('/me/ke-wallet')
 def ke_wallet_me(u=Depends(me)):
  with Session(engine) as s:return ke_wallet(s,s.get(KUser,u.id))
@@ -181,15 +183,67 @@ def use_ticket(d:TicketUseIn,u=Depends(me)):
    inv.quantity-=1;t=KTicket(user_id=u.id,post_id=p.id,meta=d.meta,start_ink=p.ink_total,expires_at=datetime.now(UTC)+timedelta(hours=1));s.add(inv);s.add(t);s.commit();return _ticket_json(t)
  except HTTPException: raise
  except Exception as e: raise HTTPException(500,'Ticket não pôde ser ativado: '+str(e)[:240])
+class KExchangeReceipt(SQLModel,table=True):
+ __tablename__='kt_exchange_receipts'
+ id:UUID=DBField(primary_key=True)
+ user_id:UUID=DBField(index=True)
+ direction:str
+ amount:int
+ coins_after:int
+ special_after:int
+ created_at:datetime=DBField(default_factory=lambda:datetime.now(UTC))
+
+class ExchangeIn(BaseModel):
+ direction:str
+ amount:int=Field(ge=1,le=1000000,strict=True)
+ request_id:UUID
+
+def _lock_user(s,user_id):
+ return s.exec(select(KUser).where(KUser.id==user_id).with_for_update()).one()
+def _lock_wallet(s,user_id):
+ return s.exec(select(KSpecialWallet).where(KSpecialWallet.user_id==user_id).with_for_update()).first()
+def _active_effect(s,user_id,kind):
+ return s.exec(select(KEffect).where(KEffect.user_id==user_id,KEffect.kind==kind,KEffect.expires_at>datetime.now(UTC)).order_by(KEffect.expires_at.desc())).first()
+
 @app.post('/special/buy')
 def special_buy(d:SpecialBuyIn,u=Depends(me)):
- prices={'magica':5,'autor':10,'marcador':3,'broche':8,'vela':5,'exlibris':10};days={'magica':7,'autor':30,'marcador':1,'broche':30,'vela':7,'exlibris':14}
+ prices={'cambio':60,'exlibris':120}
  if d.kind not in prices: raise HTTPException(400,'Artigo especial inválido')
  with Session(engine) as s:
-  w=s.get(KSpecialWallet,u.id)
+  _lock_user(s,u.id)
+  w=_lock_wallet(s,u.id)
+  if _active_effect(s,u.id,d.kind): raise HTTPException(409,'Este artigo já está ativo no seu perfil')
   if not w or w.balance<prices[d.kind]: raise HTTPException(400,'Coins Especiais insuficientes')
-  if d.kind in {'autor','marcador','vela'} and (not d.post_id or not (p:=s.get(KPost,d.post_id)) or p.user_id!=u.id): raise HTTPException(403,'Escolha uma publicação sua')
-  w.balance-=prices[d.kind];e=KEffect(user_id=u.id,kind=d.kind,post_id=d.post_id,value=d.value,expires_at=datetime.now(UTC)+timedelta(days=days[d.kind]));s.add(w);s.add(e);s.commit();return _effect_json(e)
+  w.balance-=prices[d.kind]
+  e=KEffect(user_id=u.id,kind=d.kind,post_id=None,value='',expires_at=datetime.now(UTC)+timedelta(days=7))
+  s.add(w);s.add(e);s.commit();s.refresh(e)
+  return _effect_json(e)
+
+@app.post('/special/exchange')
+def convert_currency(d:ExchangeIn,u=Depends(me)):
+ if d.direction not in {'coins_to_special','special_to_coins'}: raise HTTPException(422,'Escolha o sentido do câmbio')
+ if d.direction=='special_to_coins' and d.amount%5: raise HTTPException(422,'Use um múltiplo de 5 Coins Especiais')
+ with Session(engine) as s:
+  x=_lock_user(s,u.id)
+  receipt=s.get(KExchangeReceipt,d.request_id)
+  if receipt:
+   if receipt.user_id!=u.id or receipt.direction!=d.direction or receipt.amount!=d.amount: raise HTTPException(409,'Operação já utilizada')
+   return {'coins':receipt.coins_after,'special_coins':receipt.special_after,'replayed':True}
+  if not _active_effect(s,u.id,'cambio'): raise HTTPException(403,'O Câmbio não está ativo')
+  w=_lock_wallet(s,u.id)
+  if not w: w=KSpecialWallet(user_id=u.id,balance=0);s.add(w)
+  if d.direction=='coins_to_special':
+   if x.coins<d.amount: raise HTTPException(400,'Coins insuficientes')
+   if w.balance+d.amount*5>2147483647: raise HTTPException(400,'O saldo excede o limite permitido')
+   x.coins-=d.amount;w.balance+=d.amount*5
+  else:
+   if w.balance<d.amount: raise HTTPException(400,'Coins Especiais insuficientes')
+   if x.coins+d.amount//5>2147483647: raise HTTPException(400,'O saldo excede o limite permitido')
+   w.balance-=d.amount;x.coins+=d.amount//5
+  s.add(x);s.add(w);s.add(KExchangeReceipt(id=d.request_id,user_id=u.id,direction=d.direction,amount=d.amount,coins_after=x.coins,special_after=w.balance))
+  try:s.commit()
+  except IntegrityError:s.rollback();raise HTTPException(409,'Operação já registrada; atualize seus saldos')
+  return {'coins':x.coins,'special_coins':w.balance,'replayed':False}
 
 class KSealProfile(SQLModel, table=True):
  __tablename__='kt_seal_profiles'; user_id:UUID=DBField(primary_key=True); gif_url:str=''; music_url:str=''; border_style:str='holografica'
@@ -211,7 +265,39 @@ def public_seal(username:str):
 def edit_seal(d:SealProfileIn,u=Depends(me)):
  with Session(engine) as s:
   if not active_seal(s,u.id): raise HTTPException(403,'Compre o Selo para desbloquear esta personalização')
+  if not _active_effect(s,u.id,'exlibris') and (d.gif_url or d.music_url): raise HTTPException(403,'Ative o Ex-Libris para editar banner e música')
   p=s.get(KSealProfile,u.id) or KSealProfile(user_id=u.id);p.gif_url=d.gif_url;p.music_url=d.music_url;p.border_style=d.border_style;s.add(p);s.commit();return {'active':True,'gif_url':p.gif_url,'music_url':p.music_url,'border_style':p.border_style}
+
+class ExLibrisIn(BaseModel):
+ gif_url:str=Field(default='',max_length=500)
+ music_url:str=Field(default='',max_length=500)
+ @field_validator('gif_url','music_url')
+ @classmethod
+ def validate_media(cls,value):
+  value=value.strip()
+  if value and (not is_safe_http_url(value) or not value.lower().startswith('https://')): raise ValueError('Use um endereço HTTPS válido')
+  return value
+
+@app.get('/users/{username}/exlibris')
+def public_exlibris(username:str):
+ with Session(engine) as s:
+  u=s.exec(select(KUser).where(KUser.username==username)).first()
+  if not u: raise HTTPException(404,'Perfil não encontrado')
+  effect=_active_effect(s,u.id,'exlibris');p=s.get(KSealProfile,u.id)
+  return {'active':bool(effect),'expires_at':effect.expires_at if effect else None,'gif_url':p.gif_url if effect and p else '', 'music_url':p.music_url if effect and p else ''}
+
+@app.get('/me/exlibris')
+def get_my_exlibris(u=Depends(me)):
+ return public_exlibris(u.username)
+
+@app.patch('/me/exlibris')
+def edit_exlibris(d:ExLibrisIn,u=Depends(me)):
+ with Session(engine) as s:
+  _lock_user(s,u.id)
+  if not _active_effect(s,u.id,'exlibris'): raise HTTPException(403,'Ative o Ex-Libris para editar o banner e a música')
+  p=s.get(KSealProfile,u.id) or KSealProfile(user_id=u.id)
+  p.gif_url=d.gif_url;p.music_url=d.music_url;s.add(p);s.commit()
+  return {'active':True,'gif_url':p.gif_url,'music_url':p.music_url}
 
 @app.post('/ink-shop/buy')
 def buy_ink(u=Depends(me)):
