@@ -268,10 +268,30 @@ def edit_seal(d:SealProfileIn,u=Depends(me)):
   if not _active_effect(s,u.id,'exlibris') and (d.gif_url or d.music_url): raise HTTPException(403,'Ative o Ex-Libris para editar banner e música')
   p=s.get(KSealProfile,u.id) or KSealProfile(user_id=u.id);p.gif_url=d.gif_url;p.music_url=d.music_url;p.border_style=d.border_style;s.add(p);s.commit();return {'active':True,'gif_url':p.gif_url,'music_url':p.music_url,'border_style':p.border_style}
 
+class KExlibrisSettings(SQLModel, table=True):
+ __tablename__='kt_exlibris_settings'
+ user_id:UUID=DBField(primary_key=True)
+ banner_type:str='image'
+ music_title:str=''
+ music_artist:str=''
+ music_start:float=0
+ music_end:float=15
+ music_source_url:str=''
+ music_license:str=''
+ music_license_url:str=''
+
 class ExLibrisIn(BaseModel):
- gif_url:str=Field(default='',max_length=500)
- music_url:str=Field(default='',max_length=500)
- @field_validator('gif_url','music_url')
+ gif_url:str=Field(default='',max_length=2000)
+ music_url:str=Field(default='',max_length=2000)
+ banner_type:str=Field(default='image',pattern='^(image|video)$')
+ music_title:str=Field(default='',max_length=200)
+ music_artist:str=Field(default='',max_length=200)
+ music_start:float=Field(default=0,ge=0,le=86400,allow_inf_nan=False)
+ music_end:float=Field(default=15,gt=0,le=86415,allow_inf_nan=False)
+ music_source_url:str=Field(default='',max_length=2000)
+ music_license:str=Field(default='',max_length=150)
+ music_license_url:str=Field(default='',max_length=2000)
+ @field_validator('gif_url','music_url','music_source_url','music_license_url')
  @classmethod
  def validate_media(cls,value):
   value=value.strip()
@@ -283,8 +303,8 @@ def public_exlibris(username:str):
  with Session(engine) as s:
   u=s.exec(select(KUser).where(KUser.username==username)).first()
   if not u: raise HTTPException(404,'Perfil não encontrado')
-  effect=_active_effect(s,u.id,'exlibris');p=s.get(KSealProfile,u.id)
-  return {'active':bool(effect),'expires_at':effect.expires_at if effect else None,'gif_url':p.gif_url if effect and p else '', 'music_url':p.music_url if effect and p else ''}
+  effect=_active_effect(s,u.id,'exlibris');p=s.get(KSealProfile,u.id);cfg=s.get(KExlibrisSettings,u.id) if effect else None
+  return {'active':bool(effect),'expires_at':effect.expires_at if effect else None,'gif_url':p.gif_url if effect and p else '', 'music_url':p.music_url if effect and p else '', 'banner_type':cfg.banner_type if cfg else 'image','music_title':cfg.music_title if cfg else '', 'music_artist':cfg.music_artist if cfg else '', 'music_start':cfg.music_start if cfg else 0, 'music_end':cfg.music_end if cfg else 15, 'music_source_url':cfg.music_source_url if cfg else '', 'music_license':cfg.music_license if cfg else '', 'music_license_url':cfg.music_license_url if cfg else ''}
 
 @app.get('/me/exlibris')
 def get_my_exlibris(u=Depends(me)):
@@ -292,11 +312,15 @@ def get_my_exlibris(u=Depends(me)):
 
 @app.patch('/me/exlibris')
 def edit_exlibris(d:ExLibrisIn,u=Depends(me)):
+ if d.music_end<=d.music_start or d.music_end-d.music_start>30: raise HTTPException(422,'Escolha um trecho de até 30 segundos')
  with Session(engine) as s:
   _lock_user(s,u.id)
   if not _active_effect(s,u.id,'exlibris'): raise HTTPException(403,'Ative o Ex-Libris para editar o banner e a música')
   p=s.get(KSealProfile,u.id) or KSealProfile(user_id=u.id)
-  p.gif_url=d.gif_url;p.music_url=d.music_url;s.add(p);s.commit()
+  cfg=s.get(KExlibrisSettings,u.id) or KExlibrisSettings(user_id=u.id)
+  p.gif_url=d.gif_url;p.music_url=d.music_url
+  for name in ('banner_type','music_title','music_artist','music_start','music_end','music_source_url','music_license','music_license_url'): setattr(cfg,name,getattr(d,name))
+  s.add(p);s.add(cfg);s.commit()
   return {'active':True,'gif_url':p.gif_url,'music_url':p.music_url}
 
 @app.post('/ink-shop/buy')

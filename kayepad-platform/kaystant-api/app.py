@@ -16,7 +16,7 @@ elif DATABASE_URL.startswith('postgresql://'): DATABASE_URL='postgresql+psycopg:
 sqlite=DATABASE_URL.startswith('sqlite'); engine=create_engine(DATABASE_URL,pool_pre_ping=True,connect_args={'check_same_thread':False} if sqlite else {'prepare_threshold':None})
 app=FastAPI(title='Kaystant API',version='0.1.0')
 origins=[x.strip() for x in os.getenv('CORS_ORIGINS','https://kayepad.neocities.org').split(',') if x.strip()]
-app.add_middleware(CORSMiddleware,allow_origins=origins,allow_methods=['GET','POST','PATCH','DELETE','OPTIONS'],allow_headers=['Authorization','Content-Type'])
+app.add_middleware(CORSMiddleware,allow_origins=origins,allow_methods=['GET','POST','PUT','PATCH','DELETE','OPTIONS'],allow_headers=['Authorization','Content-Type','Range'])
 
 @app.middleware('http')
 async def security_headers(request: Request, call_next):
@@ -276,3 +276,5 @@ from auth_endpoints import *
 
 from social_delivery_endpoints import *
 from admin_endpoints import *
+
+from exlibris_media import *
