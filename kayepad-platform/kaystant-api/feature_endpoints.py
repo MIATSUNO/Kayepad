@@ -65,7 +65,7 @@ def public_profile(username:str):
 @app.patch('/profile')
 def edit_profile(d:ProfileEdit,u=Depends(me)):
  with Session(engine) as s:
-  x=s.get(KUser,u.id)
+  x=_lock_user(s,u.id)
   if d.username is not None and d.username!=x.username:
    if x.username_changed_at and x.username_changed_at.replace(tzinfo=UTC)+__import__('datetime').timedelta(days=7)>datetime.now(UTC): raise HTTPException(429,'Você só poderá alterar o nome de usuário novamente após 7 dias')
    if x.coins<50: raise HTTPException(402,'São necessários 50 coins para alterar o nome de usuário')
@@ -134,7 +134,7 @@ def update_ticket(s,p,user,amount):
   if t.expires_at.replace(tzinfo=UTC)<now: t.status='falhou';s.add(t);continue
   t.progress=max(0,min(t.meta,p.ink_total-t.start_ink));
   if t.progress>=t.meta:
-   t.status='sucesso'; w=s.get(KSpecialWallet,t.user_id) or KSpecialWallet(user_id=t.user_id,balance=0);w.balance+=t.meta;s.add(w)
+   t.status='sucesso'; _lock_user(s,t.user_id); w=_lock_wallet(s,t.user_id) or KSpecialWallet(user_id=t.user_id,balance=0);w.balance+=t.meta;s.add(w)
   s.add(t)
 
 def ke_wallet(s,u):
@@ -156,7 +156,7 @@ def ke_wallet_me(u=Depends(me)):
 @app.post('/ke-store/buy/{item}')
 def ke_buy(item:str,u=Depends(me)):
  with Session(engine) as s:
-  x=s.get(KUser,u.id); prices={'selo':2800,'ticket':600}
+  x=_lock_user(s,u.id); prices={'selo':2800,'ticket':600}
   if item not in prices: raise HTTPException(400,'Use a carteira de Coins Especiais para este artigo')
   seal=s.get(KSealState,x.id)
   if item=='selo' and seal and seal.active and seal.expires_at.replace(tzinfo=UTC)>datetime.now(UTC):
@@ -302,6 +302,6 @@ def edit_exlibris(d:ExLibrisIn,u=Depends(me)):
 @app.post('/ink-shop/buy')
 def buy_ink(u=Depends(me)):
  with Session(engine) as s:
-  x=s.get(KUser,u.id)
+  x=_lock_user(s,u.id)
   if x.coins<100: raise HTTPException(400,'São necessários 100 Coins para comprar 50 Tintas')
   x.coins-=100;x.ink+=50;s.add(x);s.commit();return {'coins':x.coins,'ink':x.ink,'purchased':50}
