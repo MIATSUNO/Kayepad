@@ -145,11 +145,11 @@ def ke_wallet(s,u):
  legacy=s.exec(select(KPurchase).where(KPurchase.user_id==u.id,KPurchase.item=='ticket')).all()
  if legacy and (not inv or inv.quantity<len(legacy)):
   inv=inv or KTicketInventory(user_id=u.id,quantity=0); inv.quantity=max(inv.quantity,len(legacy)); s.add(inv); s.commit()
- return {'coins':u.coins,'special_coins':w.balance if w else 0,'seal':bool(seal and seal.active),'selo_ativo':bool(seal and seal.active),'selo_expira_em':seal.expires_at if seal and seal.active else None,'tickets':inv.quantity if inv else 0,'tickets_active':[_ticket_json(t) for t in s.exec(select(KTicket).where(KTicket.user_id==u.id,KTicket.status=='ativo')).all()],'effects':[_effect_json(e) for e in s.exec(select(KEffect).where(KEffect.user_id==u.id,KEffect.expires_at>now)).all()]}
+ return {'coins':u.coins,'special_coins':w.balance if w else 0,'seal':bool(seal and seal.active),'selo_ativo':bool(seal and seal.active),'selo_expira_em':seal.expires_at if seal and seal.active else None,'tickets':inv.quantity if inv else 0,'tickets_active':[_ticket_json(t) for t in s.exec(select(KTicket).where(KTicket.user_id==u.id,KTicket.status=='ativo')).all()],'effects':[_effect_json(e) for e in s.exec(select(KEffect).where(KEffect.user_id==u.id,KEffect.expires_at>now,((KEffect.kind!='cambio_velho')|(KEffect.value!='used')))).all()]}
 
 @app.get('/ke-store/catalog')
 def ke_catalog():
- return {'normal':[{'id':'selo','name':'Selo','price':2800,'days':30},{'id':'ticket','name':'Ticket','price':600},{'id':'ink','name':'Cargas de Tinta','price':100,'quantity':50}],'special':[{'id':'cambio','name':'Câmbio','price':60,'days':7},{'id':'exlibris','name':'Ex-Libris','price':120,'days':7}]}
+ return {'normal':[{'id':'selo','name':'Selo','price':2800,'days':30},{'id':'ticket','name':'Ticket','price':600},{'id':'ink','name':'Cargas de Tinta','price':100,'quantity':50}],'special':[{'id':'cambio','name':'Câmbio','price':60,'days':7},{'id':'cambio_velho','name':'Câmbio Velho','price':9,'days':3,'single_use':True,'max_coins':100,'max_special_coins':500},{'id':'exlibris','name':'Ex-Libris','price':120,'days':7}]}
 @app.get('/me/ke-wallet')
 def ke_wallet_me(u=Depends(me)):
  with Session(engine) as s:return ke_wallet(s,s.get(KUser,u.id))
@@ -191,23 +191,27 @@ class KExchangeReceipt(SQLModel,table=True):
  amount:int
  coins_after:int
  special_after:int
+ kind:str='cambio'
  created_at:datetime=DBField(default_factory=lambda:datetime.now(UTC))
 
 class ExchangeIn(BaseModel):
  direction:str
  amount:int=Field(ge=1,le=1000000,strict=True)
  request_id:UUID
+ kind:str|None=Field(default=None,pattern='^(cambio|cambio_velho)$')
 
 def _lock_user(s,user_id):
  return s.exec(select(KUser).where(KUser.id==user_id).with_for_update()).one()
 def _lock_wallet(s,user_id):
  return s.exec(select(KSpecialWallet).where(KSpecialWallet.user_id==user_id).with_for_update()).first()
 def _active_effect(s,user_id,kind):
- return s.exec(select(KEffect).where(KEffect.user_id==user_id,KEffect.kind==kind,KEffect.expires_at>datetime.now(UTC)).order_by(KEffect.expires_at.desc())).first()
+ query=select(KEffect).where(KEffect.user_id==user_id,KEffect.kind==kind,KEffect.expires_at>datetime.now(UTC))
+ if kind=='cambio_velho': query=query.where(KEffect.value!='used')
+ return s.exec(query.order_by(KEffect.expires_at.desc())).first()
 
 @app.post('/special/buy')
 def special_buy(d:SpecialBuyIn,u=Depends(me)):
- prices={'cambio':60,'exlibris':120}
+ prices={'cambio':60,'cambio_velho':9,'exlibris':120}
  if d.kind not in prices: raise HTTPException(400,'Artigo especial inválido')
  with Session(engine) as s:
   _lock_user(s,u.id)
@@ -215,7 +219,8 @@ def special_buy(d:SpecialBuyIn,u=Depends(me)):
   if _active_effect(s,u.id,d.kind): raise HTTPException(409,'Este artigo já está ativo no seu perfil')
   if not w or w.balance<prices[d.kind]: raise HTTPException(400,'Coins Especiais insuficientes')
   w.balance-=prices[d.kind]
-  e=KEffect(user_id=u.id,kind=d.kind,post_id=None,value='',expires_at=datetime.now(UTC)+timedelta(days=7))
+  duration=3 if d.kind=='cambio_velho' else 7
+  e=KEffect(user_id=u.id,kind=d.kind,post_id=None,value='',expires_at=datetime.now(UTC)+timedelta(days=duration))
   s.add(w);s.add(e);s.commit();s.refresh(e)
   return _effect_json(e)
 
@@ -223,13 +228,24 @@ def special_buy(d:SpecialBuyIn,u=Depends(me)):
 def convert_currency(d:ExchangeIn,u=Depends(me)):
  if d.direction not in {'coins_to_special','special_to_coins'}: raise HTTPException(422,'Escolha o sentido do câmbio')
  if d.direction=='special_to_coins' and d.amount%5: raise HTTPException(422,'Use um múltiplo de 5 Coins Especiais')
+ if d.kind=='cambio_velho':
+  limit=500 if d.direction=='special_to_coins' else 100
+  if d.amount>limit: raise HTTPException(422,'O Câmbio Velho permite no máximo 100 Coins reais ou 500 Coins Especiais por uso')
  with Session(engine) as s:
   x=_lock_user(s,u.id)
   receipt=s.get(KExchangeReceipt,d.request_id)
   if receipt:
    if receipt.user_id!=u.id or receipt.direction!=d.direction or receipt.amount!=d.amount: raise HTTPException(409,'Operação já utilizada')
-   return {'coins':receipt.coins_after,'special_coins':receipt.special_after,'replayed':True}
-  if not _active_effect(s,u.id,'cambio'): raise HTTPException(403,'O Câmbio não está ativo')
+   if d.kind and receipt.kind!=d.kind: raise HTTPException(409,'ID de operação reutilizado para outro tipo de câmbio')
+   return {'coins':receipt.coins_after,'special_coins':receipt.special_after,'replayed':True,'kind':receipt.kind}
+  regular=_active_effect(s,u.id,'cambio')
+  old=_active_effect(s,u.id,'cambio_velho')
+  kind=d.kind or ('cambio' if regular else 'cambio_velho' if old else None)
+  effect=regular if kind=='cambio' else old if kind=='cambio_velho' else None
+  if not effect: raise HTTPException(403,'Você não tem um Câmbio ativo e disponível')
+  if kind=='cambio_velho':
+   limit=500 if d.direction=='special_to_coins' else 100
+   if d.amount>limit: raise HTTPException(422,'O Câmbio Velho permite no máximo 100 Coins reais ou 500 Coins Especiais por uso')
   w=_lock_wallet(s,u.id)
   if not w: w=KSpecialWallet(user_id=u.id,balance=0);s.add(w)
   if d.direction=='coins_to_special':
@@ -240,10 +256,11 @@ def convert_currency(d:ExchangeIn,u=Depends(me)):
    if w.balance<d.amount: raise HTTPException(400,'Coins Especiais insuficientes')
    if x.coins+d.amount//5>2147483647: raise HTTPException(400,'O saldo excede o limite permitido')
    w.balance-=d.amount;x.coins+=d.amount//5
-  s.add(x);s.add(w);s.add(KExchangeReceipt(id=d.request_id,user_id=u.id,direction=d.direction,amount=d.amount,coins_after=x.coins,special_after=w.balance))
+  if kind=='cambio_velho': effect.value='used';s.add(effect)
+  s.add(x);s.add(w);s.add(KExchangeReceipt(id=d.request_id,user_id=u.id,direction=d.direction,amount=d.amount,coins_after=x.coins,special_after=w.balance,kind=kind))
   try:s.commit()
   except IntegrityError:s.rollback();raise HTTPException(409,'Operação já registrada; atualize seus saldos')
-  return {'coins':x.coins,'special_coins':w.balance,'replayed':False}
+  return {'coins':x.coins,'special_coins':w.balance,'replayed':False,'kind':kind}
 
 class KSealProfile(SQLModel, table=True):
  __tablename__='kt_seal_profiles'; user_id:UUID=DBField(primary_key=True); gif_url:str=''; music_url:str=''; border_style:str='holografica'

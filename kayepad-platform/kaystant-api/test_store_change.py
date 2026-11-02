@@ -11,7 +11,7 @@ def test_store_and_conversion():
    s.add(u);s.commit();s.refresh(u);uid=u.id
    s.add(KSpecialWallet(user_id=uid,balance=500));s.commit()
   token=issue(KUser(id=uid,email='local-test@example.org',username='tester',password_hash='hash')); h={'Authorization':'Bearer '+token}
-  cat=c.get('/ke-store/catalog').json();assert [(i['id'],i['price'],i['days']) for i in cat['special']]==[('cambio',60,7),('exlibris',120,7)]
+  cat=c.get('/ke-store/catalog').json();assert [(i['id'],i['price'],i['days']) for i in cat['special']]==[('cambio',60,7),('cambio_velho',9,3),('exlibris',120,7)]
   assert c.post('/special/buy',headers=h,json={'kind':'magica'}).status_code==400
   rid=str(uuid.uuid4()); d={'direction':'coins_to_special','amount':4,'request_id':rid}
   assert c.post('/special/exchange',headers=h,json=d).status_code==403
