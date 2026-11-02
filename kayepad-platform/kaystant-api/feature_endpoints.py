@@ -196,7 +196,7 @@ class KExchangeReceipt(SQLModel,table=True):
 
 class ExchangeIn(BaseModel):
  direction:str
- amount:int=Field(ge=1,le=1000000,strict=True)
+ amount:int=Field(ge=1,le=2147483647,strict=True)
  request_id:UUID
  kind:str|None=Field(default=None,pattern='^(cambio|cambio_velho)$')
 
